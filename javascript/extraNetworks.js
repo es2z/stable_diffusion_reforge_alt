@@ -66,6 +66,8 @@ function setupExtraNetworksForTab(tabname) {
             });
 
             applySort(force);
+            // Update virtual scroll after filter
+            updateVirtualScroll(tabname_full);
         };
 
         var applySort = function(force) {
@@ -76,12 +78,12 @@ function setupExtraNetworksForTab(tabname) {
             var sortKey = activeSearchElem ? activeSearchElem.dataset.sortkey : "default";
             var sortKeyDataField = "sort" + sortKey.charAt(0).toUpperCase() + sortKey.slice(1);
             var sortKeyStore = sortKey + "-" + sort_dir.dataset.sortdir + "-" + cards.length;
-    
+
             if (sortKeyStore == currentSort && !force) {
                 return;
             }
             currentSort = sortKeyStore;
-    
+
             var sortedCards = Array.from(cards);
             sortedCards.sort(function(cardA, cardB) {
                 var a = cardA.dataset[sortKeyDataField];
@@ -91,17 +93,20 @@ function setupExtraNetworksForTab(tabname) {
                 }
                 return (a < b ? -1 : (a > b ? 1 : 0));
             });
-    
+
             if (reverse) {
                 sortedCards.reverse();
             }
-    
+
             parent.innerHTML = '';
             var frag = document.createDocumentFragment();
             sortedCards.forEach(function(card) {
                 frag.appendChild(card);
             });
             parent.appendChild(frag);
+
+            // Update virtual scroll after sort
+            updateVirtualScroll(tabname_full);
         };
 
         search.addEventListener("input", function() {
@@ -109,6 +114,10 @@ function setupExtraNetworksForTab(tabname) {
         });
         applySort();
         applyFilter();
+
+        // Initialize virtual scrolling for performance
+        initVirtualScroll(tabname_full);
+
         extraNetworksApplySort[tabname_full] = applySort;
         extraNetworksApplyFilter[tabname_full] = applyFilter;
 
@@ -186,6 +195,72 @@ function applyExtraNetworkSort(tabname_full) {
 var extraNetworksApplyFilter = {};
 var extraNetworksApplySort = {};
 var activePromptTextarea = {};
+
+/**
+ * Simple Virtual Scrolling for ExtraNetworks
+ * Shows only visible cards to improve scroll performance
+ */
+var virtualScrollState = {};
+
+function initVirtualScroll(tabname_full) {
+    var cardsContainer = gradioApp().querySelector('#' + tabname_full + '_cards');
+    if (!cardsContainer) return;
+
+    var allCards = Array.from(cardsContainer.querySelectorAll('div.card'));
+    if (allCards.length < 50) return; // Only enable for 50+ items
+
+    virtualScrollState[tabname_full] = {
+        container: cardsContainer,
+        allCards: allCards,
+        visibleCards: new Set(),
+        threshold: 500 // px above/below viewport
+    };
+
+    // Use IntersectionObserver for efficient visibility detection
+    var state = virtualScrollState[tabname_full];
+    var observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+            var card = entry.target;
+            if (entry.isIntersecting) {
+                // Card is visible, ensure it's rendered
+                card.style.display = '';
+                state.visibleCards.add(card);
+            } else {
+                // Card is not visible, hide it
+                card.style.display = 'none';
+                state.visibleCards.delete(card);
+            }
+        });
+    }, {
+        root: cardsContainer,
+        rootMargin: state.threshold + 'px 0px',
+        threshold: 0
+    });
+
+    // Observe all cards
+    allCards.forEach(function(card) {
+        observer.observe(card);
+    });
+
+    state.observer = observer;
+}
+
+function updateVirtualScroll(tabname_full) {
+    var state = virtualScrollState[tabname_full];
+    if (!state) return;
+
+    // Stop current observer
+    if (state.observer) {
+        state.observer.disconnect();
+    }
+
+    // Reinitialize with new cards
+    var cardsContainer = gradioApp().querySelector('#' + tabname_full + '_cards');
+    if (!cardsContainer) return;
+
+    virtualScrollState[tabname_full] = null;
+    initVirtualScroll(tabname_full);
+}
 
 function setupExtraNetworks() {
     setupExtraNetworksForTab('txt2img');

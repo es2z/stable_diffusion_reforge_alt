@@ -1,0 +1,10 @@
+﻿name,prompt,negative_prompt
+いゆもの,"[
+[
+(baku-p),g4ku,suwa_yasai ,natsu_no_koucha,musouzuki,chikuzen1996,(kanya_pyi:0.92),
+:
+(baku-p),g4ku,, suwa_yasai ,mimi \(mimi puru\), anzu_ame,momochi_chia,natsu_no_koucha, aikei_ake,nekomimimix,mizuki_kotora,chatsune \(white lolita\),yairo_ju,chikuzen1996, , baku-p,tokomaya_keita, g4ku, suwa_yasai ,natsu_no_koucha,chikuzen1996,[kanya_pyi],
+:0.15]
+:
+(baku-p),g4ku,, suwa_yasai ,natsu_no_koucha,[harusame \(unmei no ikasumi\)],musouzuki,chikuzen1996,, , baku-p,tokomaya_keita, g4ku, suwa_yasai ,natsu_no_koucha,,
+:0.7] <lora:bkp:0.2>",
