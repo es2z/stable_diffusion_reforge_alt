@@ -1,0 +1,3746 @@
+﻿```aspectRatioOverlay.js
+
+let currentWidth = null;
+let currentHeight = null;
+let arFrameTimeout = setTimeout(function() {}, 0);
+
+function dimensionChange(e, is_width, is_height) {
+
+    if (is_width) {
+        currentWidth = e.target.value * 1.0;
+    }
+    if (is_height) {
+        currentHeight = e.target.value * 1.0;
+    }
+
+    var inImg2img = gradioApp().querySelector("#tab_img2img").style.display == "block";
+
+    if (!inImg2img) {
+        return;
+    }
+
+    var targetElement = null;
+
+    var tabIndex = get_tab_index('mode_img2img');
+    if (tabIndex == 0) { // img2img
+        targetElement = gradioApp().querySelector('#img2img_image div[data-testid=image] img');
+    } else if (tabIndex == 1) { //Sketch
+        targetElement = gradioApp().querySelector('#img2img_sketch div[data-testid=image] img');
+    } else if (tabIndex == 2) { // Inpaint
+        targetElement = gradioApp().querySelector('#img2maskimg div[data-testid=image] img');
+    } else if (tabIndex == 3) { // Inpaint sketch
+        targetElement = gradioApp().querySelector('#inpaint_sketch div[data-testid=image] img');
+    }
+
+
+    if (targetElement) {
+
+        var arPreviewRect = gradioApp().querySelector('#imageARPreview');
+        if (!arPreviewRect) {
+            arPreviewRect = document.createElement('div');
+            arPreviewRect.id = "imageARPreview";
+            gradioApp().appendChild(arPreviewRect);
+        }
+
+
+
+        var viewportOffset = targetElement.getBoundingClientRect();
+
+        var viewportscale = Math.min(targetElement.clientWidth / targetElement.naturalWidth, targetElement.clientHeight / targetElement.naturalHeight);
+
+        var scaledx = targetElement.naturalWidth * viewportscale;
+        var scaledy = targetElement.naturalHeight * viewportscale;
+
+        var clientRectTop = (viewportOffset.top + window.scrollY);
+        var clientRectLeft = (viewportOffset.left + window.scrollX);
+        var clientRectCentreY = clientRectTop + (targetElement.clientHeight / 2);
+        var clientRectCentreX = clientRectLeft + (targetElement.clientWidth / 2);
+
+        var arscale = Math.min(scaledx / currentWidth, scaledy / currentHeight);
+        var arscaledx = currentWidth * arscale;
+        var arscaledy = currentHeight * arscale;
+
+        var arRectTop = clientRectCentreY - (arscaledy / 2);
+        var arRectLeft = clientRectCentreX - (arscaledx / 2);
+        var arRectWidth = arscaledx;
+        var arRectHeight = arscaledy;
+
+        arPreviewRect.style.top = arRectTop + 'px';
+        arPreviewRect.style.left = arRectLeft + 'px';
+        arPreviewRect.style.width = arRectWidth + 'px';
+        arPreviewRect.style.height = arRectHeight + 'px';
+
+        clearTimeout(arFrameTimeout);
+        arFrameTimeout = setTimeout(function() {
+            arPreviewRect.style.display = 'none';
+        }, 2000);
+
+        arPreviewRect.style.display = 'block';
+
+    }
+
+}
+
+
+onAfterUiUpdate(function() {
+    var arPreviewRect = gradioApp().querySelector('#imageARPreview');
+    if (arPreviewRect) {
+        arPreviewRect.style.display = 'none';
+    }
+    var tabImg2img = gradioApp().querySelector("#tab_img2img");
+    if (tabImg2img) {
+        var inImg2img = tabImg2img.style.display == "block";
+        if (inImg2img) {
+            let inputs = gradioApp().querySelectorAll('input');
+            inputs.forEach(function(e) {
+                var is_width = e.parentElement.id == "img2img_width";
+                var is_height = e.parentElement.id == "img2img_height";
+
+                if ((is_width || is_height) && !e.classList.contains('scrollwatch')) {
+                    e.addEventListener('input', function(e) {
+                        dimensionChange(e, is_width, is_height);
+                    });
+                    e.classList.add('scrollwatch');
+                }
+                if (is_width) {
+                    currentWidth = e.value * 1.0;
+                }
+                if (is_height) {
+                    currentHeight = e.value * 1.0;
+                }
+            });
+        }
+    }
+});
+
+```
+
+```contextMenus.js
+
+var contextMenuInit = function() {
+    let eventListenerApplied = false;
+    let menuSpecs = new Map();
+
+    const uid = function() {
+        return Date.now().toString(36) + Math.random().toString(36).substring(2);
+    };
+
+    function showContextMenu(event, element, menuEntries) {
+        let oldMenu = gradioApp().querySelector('#context-menu');
+        if (oldMenu) {
+            oldMenu.remove();
+        }
+
+        let baseStyle = window.getComputedStyle(uiCurrentTab);
+
+        const contextMenu = document.createElement('nav');
+        contextMenu.id = "context-menu";
+        contextMenu.style.background = baseStyle.background;
+        contextMenu.style.color = baseStyle.color;
+        contextMenu.style.fontFamily = baseStyle.fontFamily;
+        contextMenu.style.top = event.pageY + 'px';
+        contextMenu.style.left = event.pageX + 'px';
+
+        const contextMenuList = document.createElement('ul');
+        contextMenuList.className = 'context-menu-items';
+        contextMenu.append(contextMenuList);
+
+        menuEntries.forEach(function(entry) {
+            let contextMenuEntry = document.createElement('a');
+            contextMenuEntry.innerHTML = entry['name'];
+            contextMenuEntry.addEventListener("click", function() {
+                entry['func']();
+            });
+            contextMenuList.append(contextMenuEntry);
+
+        });
+
+        gradioApp().appendChild(contextMenu);
+    }
+
+    function appendContextMenuOption(targetElementSelector, entryName, entryFunction) {
+
+        var currentItems = menuSpecs.get(targetElementSelector);
+
+        if (!currentItems) {
+            currentItems = [];
+            menuSpecs.set(targetElementSelector, currentItems);
+        }
+        let newItem = {
+            id: targetElementSelector + '_' + uid(),
+            name: entryName,
+            func: entryFunction,
+            isNew: true
+        };
+
+        currentItems.push(newItem);
+        return newItem['id'];
+    }
+
+    function removeContextMenuOption(uid) {
+        menuSpecs.forEach(function(v) {
+            let index = -1;
+            v.forEach(function(e, ei) {
+                if (e['id'] == uid) {
+                    index = ei;
+                }
+            });
+            if (index >= 0) {
+                v.splice(index, 1);
+            }
+        });
+    }
+
+    function addContextMenuEventListener() {
+        if (eventListenerApplied) {
+            return;
+        }
+        gradioApp().addEventListener("click", function(e) {
+            if (!e.isTrusted) {
+                return;
+            }
+
+            let oldMenu = gradioApp().querySelector('#context-menu');
+            if (oldMenu) {
+                oldMenu.remove();
+            }
+        });
+        ['contextmenu', 'touchstart'].forEach((eventType) => {
+            gradioApp().addEventListener(eventType, function(e) {
+                let ev = e;
+                if (eventType.startsWith('touch')) {
+                    if (e.touches.length !== 2) return;
+                    ev = e.touches[0];
+                }
+                let oldMenu = gradioApp().querySelector('#context-menu');
+                if (oldMenu) {
+                    oldMenu.remove();
+                }
+                menuSpecs.forEach(function(v, k) {
+                    if (e.composedPath()[0].matches(k)) {
+                        showContextMenu(ev, e.composedPath()[0], v);
+                        e.preventDefault();
+                    }
+                });
+            }, {passive: false});
+        });
+        eventListenerApplied = true;
+
+    }
+
+    return [appendContextMenuOption, removeContextMenuOption, addContextMenuEventListener];
+};
+
+var initResponse = contextMenuInit();
+var appendContextMenuOption = initResponse[0];
+var removeContextMenuOption = initResponse[1];
+var addContextMenuEventListener = initResponse[2];
+
+(function() {
+    //Start example Context Menu Items
+    let generateOnRepeat = function(genbuttonid, interruptbuttonid) {
+        let genbutton = gradioApp().querySelector(genbuttonid);
+        let interruptbutton = gradioApp().querySelector(interruptbuttonid);
+        if (!interruptbutton.offsetParent) {
+            genbutton.click();
+        }
+        clearInterval(window.generateOnRepeatInterval);
+        window.generateOnRepeatInterval = setInterval(function() {
+            if (!interruptbutton.offsetParent) {
+                genbutton.click();
+            }
+        },
+        500);
+    };
+
+    let generateOnRepeat_txt2img = function() {
+        generateOnRepeat('#txt2img_generate', '#txt2img_interrupt');
+    };
+
+    let generateOnRepeat_img2img = function() {
+        generateOnRepeat('#img2img_generate', '#img2img_interrupt');
+    };
+
+    appendContextMenuOption('#txt2img_generate', 'Generate forever', generateOnRepeat_txt2img);
+    appendContextMenuOption('#txt2img_interrupt', 'Generate forever', generateOnRepeat_txt2img);
+    appendContextMenuOption('#img2img_generate', 'Generate forever', generateOnRepeat_img2img);
+    appendContextMenuOption('#img2img_interrupt', 'Generate forever', generateOnRepeat_img2img);
+
+    let cancelGenerateForever = function() {
+        clearInterval(window.generateOnRepeatInterval);
+    };
+
+    appendContextMenuOption('#txt2img_interrupt', 'Cancel generate forever', cancelGenerateForever);
+    appendContextMenuOption('#txt2img_generate', 'Cancel generate forever', cancelGenerateForever);
+    appendContextMenuOption('#img2img_interrupt', 'Cancel generate forever', cancelGenerateForever);
+    appendContextMenuOption('#img2img_generate', 'Cancel generate forever', cancelGenerateForever);
+
+})();
+//End example Context Menu Items
+
+onAfterUiUpdate(addContextMenuEventListener);
+
+```
+
+```dragdrop.js
+// allows drag-dropping files into gradio image elements, and also pasting images from clipboard
+
+function isValidImageList(files) {
+    return files && files?.length === 1 && ['image/png', 'image/gif', 'image/jpeg'].includes(files[0].type);
+}
+
+function dropReplaceImage(imgWrap, files) {
+    if (!isValidImageList(files)) {
+        return;
+    }
+
+    const tmpFile = files[0];
+
+    imgWrap.querySelector('.modify-upload button + button, .touch-none + div button + button')?.click();
+    const callback = () => {
+        const fileInput = imgWrap.querySelector('input[type="file"]');
+        if (fileInput) {
+            if (files.length === 0) {
+                files = new DataTransfer();
+                files.items.add(tmpFile);
+                fileInput.files = files.files;
+            } else {
+                fileInput.files = files;
+            }
+            fileInput.dispatchEvent(new Event('change'));
+        }
+    };
+
+    if (imgWrap.closest('#pnginfo_image')) {
+        // special treatment for PNG Info tab, wait for fetch request to finish
+        const oldFetch = window.fetch;
+        window.fetch = async(input, options) => {
+            const response = await oldFetch(input, options);
+            if ('api/predict/' === input) {
+                const content = await response.text();
+                window.fetch = oldFetch;
+                window.requestAnimationFrame(() => callback());
+                return new Response(content, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers
+                });
+            }
+            return response;
+        };
+    } else {
+        window.requestAnimationFrame(() => callback());
+    }
+}
+
+function eventHasFiles(e) {
+    if (!e.dataTransfer || !e.dataTransfer.files) return false;
+    if (e.dataTransfer.files.length > 0) return true;
+    if (e.dataTransfer.items.length > 0 && e.dataTransfer.items[0].kind == "file") return true;
+
+    return false;
+}
+
+function isURL(url) {
+    try {
+        const _ = new URL(url);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function dragDropTargetIsPrompt(target) {
+    if (target?.placeholder && target?.placeholder.indexOf("Prompt") >= 0) return true;
+    if (target?.parentNode?.parentNode?.className?.indexOf("prompt") > 0) return true;
+    return false;
+}
+
+window.document.addEventListener('dragover', e => {
+    const target = e.composedPath()[0];
+    if (!eventHasFiles(e)) return;
+
+    var targetImage = target.closest('[data-testid="image"]');
+    if (!dragDropTargetIsPrompt(target) && !targetImage) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+});
+
+window.document.addEventListener('drop', async e => {
+    const target = e.composedPath()[0];
+    const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (!eventHasFiles(e) && !isURL(url)) return;
+
+    if (dragDropTargetIsPrompt(target)) {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const isImg2img = get_tab_index('tabs') == 1;
+        let prompt_image_target = isImg2img ? "img2img_prompt_image" : "txt2img_prompt_image";
+
+        const imgParent = gradioApp().getElementById(prompt_image_target);
+        const files = e.dataTransfer.files;
+        const fileInput = imgParent.querySelector('input[type="file"]');
+        if (eventHasFiles(e) && fileInput) {
+            fileInput.files = files;
+            fileInput.dispatchEvent(new Event('change'));
+        } else if (url) {
+            try {
+                const request = await fetch(url);
+                if (!request.ok) {
+                    console.error('Error fetching URL:', url, request.status);
+                    return;
+                }
+                const data = new DataTransfer();
+                data.items.add(new File([await request.blob()], 'image.png'));
+                fileInput.files = data.files;
+                fileInput.dispatchEvent(new Event('change'));
+            } catch (error) {
+                console.error('Error fetching URL:', url, error);
+                return;
+            }
+        }
+    }
+
+    var targetImage = target.closest('[data-testid="image"]');
+    if (targetImage) {
+        e.stopPropagation();
+        e.preventDefault();
+        const files = e.dataTransfer.files;
+        dropReplaceImage(targetImage, files);
+        return;
+    }
+});
+
+window.addEventListener('paste', e => {
+    const files = e.clipboardData.files;
+    if (!isValidImageList(files)) {
+        return;
+    }
+
+    const visibleImageFields = [...gradioApp().querySelectorAll('[data-testid="image"]')]
+        .filter(el => uiElementIsVisible(el))
+        .sort((a, b) => uiElementInSight(b) - uiElementInSight(a));
+
+
+    if (!visibleImageFields.length) {
+        return;
+    }
+
+    const firstFreeImageField = visibleImageFields
+        .filter(el => !el.querySelector('img'))?.[0];
+
+    dropReplaceImage(
+        firstFreeImageField ?
+            firstFreeImageField :
+            visibleImageFields[visibleImageFields.length - 1]
+        , files
+    );
+});
+
+```
+
+```edit-attention.js
+function keyupEditAttention(event) {
+    let target = event.originalTarget || event.composedPath()[0];
+    if (!target.matches("*:is([id*='_toprow'] [id*='_prompt'], .prompt) textarea")) return;
+    if (!(event.metaKey || event.ctrlKey)) return;
+
+    let isPlus = event.key == "ArrowUp";
+    let isMinus = event.key == "ArrowDown";
+    if (!isPlus && !isMinus) return;
+
+    let selectionStart = target.selectionStart;
+    let selectionEnd = target.selectionEnd;
+    let text = target.value;
+
+    function selectCurrentParenthesisBlock(OPEN, CLOSE) {
+        if (selectionStart !== selectionEnd) return false;
+
+        // Find opening parenthesis around current cursor
+        const before = text.substring(0, selectionStart);
+        let beforeParen = before.lastIndexOf(OPEN);
+        if (beforeParen == -1) return false;
+
+        let beforeClosingParen = before.lastIndexOf(CLOSE);
+        if (beforeClosingParen != -1 && beforeClosingParen > beforeParen) return false;
+
+        // Find closing parenthesis around current cursor
+        const after = text.substring(selectionStart);
+        let afterParen = after.indexOf(CLOSE);
+        if (afterParen == -1) return false;
+
+        let afterOpeningParen = after.indexOf(OPEN);
+        if (afterOpeningParen != -1 && afterOpeningParen < afterParen) return false;
+
+        // Set the selection to the text between the parenthesis
+        const parenContent = text.substring(beforeParen + 1, selectionStart + afterParen);
+        if (/.*:-?[\d.]+/s.test(parenContent)) {
+            const lastColon = parenContent.lastIndexOf(":");
+            selectionStart = beforeParen + 1;
+            selectionEnd = selectionStart + lastColon;
+        } else {
+            selectionStart = beforeParen + 1;
+            selectionEnd = selectionStart + parenContent.length;
+        }
+
+        target.setSelectionRange(selectionStart, selectionEnd);
+        return true;
+    }
+
+    function selectCurrentWord() {
+        if (selectionStart !== selectionEnd) return false;
+        const whitespace_delimiters = {"Tab": "\t", "Carriage Return": "\r", "Line Feed": "\n"};
+        let delimiters = opts.keyedit_delimiters;
+
+        for (let i of opts.keyedit_delimiters_whitespace) {
+            delimiters += whitespace_delimiters[i];
+        }
+
+        // seek backward to find beginning
+        while (!delimiters.includes(text[selectionStart - 1]) && selectionStart > 0) {
+            selectionStart--;
+        }
+
+        // seek forward to find end
+        while (!delimiters.includes(text[selectionEnd]) && selectionEnd < text.length) {
+            selectionEnd++;
+        }
+
+        // deselect surrounding whitespace
+        while (text[selectionStart] == " " && selectionStart < selectionEnd) {
+            selectionStart++;
+        }
+        while (text[selectionEnd - 1] == " " && selectionEnd > selectionStart) {
+            selectionEnd--;
+        }
+
+        target.setSelectionRange(selectionStart, selectionEnd);
+        return true;
+    }
+
+    // If the user hasn't selected anything, let's select their current parenthesis block or word
+    if (!selectCurrentParenthesisBlock('<', '>') && !selectCurrentParenthesisBlock('(', ')') && !selectCurrentParenthesisBlock('[', ']')) {
+        selectCurrentWord();
+    }
+
+    event.preventDefault();
+
+    var closeCharacter = ')';
+    var delta = opts.keyedit_precision_attention;
+    var start = selectionStart > 0 ? text[selectionStart - 1] : "";
+    var end = text[selectionEnd];
+
+    if (start == '<') {
+        closeCharacter = '>';
+        delta = opts.keyedit_precision_extra;
+    } else if (start == '(' && end == ')' || start == '[' && end == ']') { // convert old-style (((emphasis)))
+        let numParen = 0;
+
+        while (text[selectionStart - numParen - 1] == start && text[selectionEnd + numParen] == end) {
+            numParen++;
+        }
+
+        if (start == "[") {
+            weight = (1 / 1.1) ** numParen;
+        } else {
+            weight = 1.1 ** numParen;
+        }
+
+        weight = Math.round(weight / opts.keyedit_precision_attention) * opts.keyedit_precision_attention;
+
+        text = text.slice(0, selectionStart - numParen) + "(" + text.slice(selectionStart, selectionEnd) + ":" + weight + ")" + text.slice(selectionEnd + numParen);
+        selectionStart -= numParen - 1;
+        selectionEnd -= numParen - 1;
+    } else if (start != '(') {
+        // do not include spaces at the end
+        while (selectionEnd > selectionStart && text[selectionEnd - 1] == ' ') {
+            selectionEnd--;
+        }
+
+        if (selectionStart == selectionEnd) {
+            return;
+        }
+
+        text = text.slice(0, selectionStart) + "(" + text.slice(selectionStart, selectionEnd) + ":1.0)" + text.slice(selectionEnd);
+
+        selectionStart++;
+        selectionEnd++;
+    }
+
+    if (text[selectionEnd] != ':') return;
+    var weightLength = text.slice(selectionEnd + 1).indexOf(closeCharacter) + 1;
+    var weight = parseFloat(text.slice(selectionEnd + 1, selectionEnd + weightLength));
+    if (isNaN(weight)) return;
+
+    weight += isPlus ? delta : -delta;
+    weight = parseFloat(weight.toPrecision(12));
+    if (Number.isInteger(weight)) weight += ".0";
+
+    if (closeCharacter == ')' && weight == 1) {
+        var endParenPos = text.substring(selectionEnd).indexOf(')');
+        text = text.slice(0, selectionStart - 1) + text.slice(selectionStart, selectionEnd) + text.slice(selectionEnd + endParenPos + 1);
+        selectionStart--;
+        selectionEnd--;
+    } else {
+        text = text.slice(0, selectionEnd + 1) + weight + text.slice(selectionEnd + weightLength);
+    }
+
+    target.focus();
+    target.value = text;
+    target.selectionStart = selectionStart;
+    target.selectionEnd = selectionEnd;
+
+    updateInput(target);
+}
+
+addEventListener('keydown', (event) => {
+    keyupEditAttention(event);
+});
+
+```
+
+```edit-order.js
+/* alt+left/right moves text in prompt */
+
+function keyupEditOrder(event) {
+    if (!opts.keyedit_move) return;
+
+    let target = event.originalTarget || event.composedPath()[0];
+    if (!target.matches("*:is([id*='_toprow'] [id*='_prompt'], .prompt) textarea")) return;
+    if (!event.altKey) return;
+
+    let isLeft = event.key == "ArrowLeft";
+    let isRight = event.key == "ArrowRight";
+    if (!isLeft && !isRight) return;
+    event.preventDefault();
+
+    let selectionStart = target.selectionStart;
+    let selectionEnd = target.selectionEnd;
+    let text = target.value;
+    let items = text.split(",");
+    let indexStart = (text.slice(0, selectionStart).match(/,/g) || []).length;
+    let indexEnd = (text.slice(0, selectionEnd).match(/,/g) || []).length;
+    let range = indexEnd - indexStart + 1;
+
+    if (isLeft && indexStart > 0) {
+        items.splice(indexStart - 1, 0, ...items.splice(indexStart, range));
+        target.value = items.join();
+        target.selectionStart = items.slice(0, indexStart - 1).join().length + (indexStart == 1 ? 0 : 1);
+        target.selectionEnd = items.slice(0, indexEnd).join().length;
+    } else if (isRight && indexEnd < items.length - 1) {
+        items.splice(indexStart + 1, 0, ...items.splice(indexStart, range));
+        target.value = items.join();
+        target.selectionStart = items.slice(0, indexStart + 1).join().length + 1;
+        target.selectionEnd = items.slice(0, indexEnd + 2).join().length;
+    }
+
+    event.preventDefault();
+    updateInput(target);
+}
+
+addEventListener('keydown', (event) => {
+    keyupEditOrder(event);
+});
+
+```
+
+```extensions.js
+
+function extensions_apply(_disabled_list, _update_list, disable_all) {
+    var disable = [];
+    var update = [];
+    const extensions_input = gradioApp().querySelectorAll('#extensions input[type="checkbox"]');
+    if (extensions_input.length == 0) {
+        throw Error("Extensions page not yet loaded.");
+    }
+    extensions_input.forEach(function(x) {
+        if (x.name.startsWith("enable_") && !x.checked) {
+            disable.push(x.name.substring(7));
+        }
+
+        if (x.name.startsWith("update_") && x.checked) {
+            update.push(x.name.substring(7));
+        }
+    });
+
+    restart_reload();
+
+    return [JSON.stringify(disable), JSON.stringify(update), disable_all];
+}
+
+function extensions_check() {
+    var disable = [];
+
+    gradioApp().querySelectorAll('#extensions input[type="checkbox"]').forEach(function(x) {
+        if (x.name.startsWith("enable_") && !x.checked) {
+            disable.push(x.name.substring(7));
+        }
+    });
+
+    gradioApp().querySelectorAll('#extensions .extension_status').forEach(function(x) {
+        x.innerHTML = "Loading...";
+    });
+
+
+    var id = randomId();
+    requestProgress(id, gradioApp().getElementById('extensions_installed_html'), null, function() {
+
+    });
+
+    return [id, JSON.stringify(disable)];
+}
+
+function install_extension_from_index(button, url) {
+    button.disabled = "disabled";
+    button.value = "Installing...";
+
+    var textarea = gradioApp().querySelector('#extension_to_install textarea');
+    textarea.value = url;
+    updateInput(textarea);
+
+    gradioApp().querySelector('#install_extension_button').click();
+}
+
+function config_state_confirm_restore(_, config_state_name, config_restore_type) {
+    if (config_state_name == "Current") {
+        return [false, config_state_name, config_restore_type];
+    }
+    let restored = "";
+    if (config_restore_type == "extensions") {
+        restored = "all saved extension versions";
+    } else if (config_restore_type == "webui") {
+        restored = "the webui version";
+    } else {
+        restored = "the webui version and all saved extension versions";
+    }
+    let confirmed = confirm("Are you sure you want to restore from this state?\nThis will reset " + restored + ".");
+    if (confirmed) {
+        restart_reload();
+        gradioApp().querySelectorAll('#extensions .extension_status').forEach(function(x) {
+            x.innerHTML = "Loading...";
+        });
+    }
+    return [confirmed, config_state_name, config_restore_type];
+}
+
+function toggle_all_extensions(event) {
+    gradioApp().querySelectorAll('#extensions .extension_toggle').forEach(function(checkbox_el) {
+        checkbox_el.checked = event.target.checked;
+    });
+}
+
+function toggle_extension() {
+    let all_extensions_toggled = true;
+    for (const checkbox_el of gradioApp().querySelectorAll('#extensions .extension_toggle')) {
+        if (!checkbox_el.checked) {
+            all_extensions_toggled = false;
+            break;
+        }
+    }
+
+    gradioApp().querySelector('#extensions .all_extensions_toggle').checked = all_extensions_toggled;
+}
+
+```
+
+```extraNetworks.js
+function toggleCss(key, css, enable) {
+    var style = document.getElementById(key);
+    if (enable && !style) {
+        style = document.createElement('style');
+        style.id = key;
+        style.type = 'text/css';
+        document.head.appendChild(style);
+    }
+    if (style && !enable) {
+        document.head.removeChild(style);
+    }
+    if (style) {
+        style.innerHTML == '';
+        style.appendChild(document.createTextNode(css));
+    }
+}
+
+function setupExtraNetworksForTab(tabname) {
+    function registerPrompt(tabname, id) {
+        var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+
+        if (!activePromptTextarea[tabname]) {
+            activePromptTextarea[tabname] = textarea;
+        }
+
+        textarea.addEventListener("focus", function() {
+            activePromptTextarea[tabname] = textarea;
+        });
+    }
+
+    var tabnav = gradioApp().querySelector('#' + tabname + '_extra_tabs > div.tab-nav');
+    var controlsDiv = document.createElement('DIV');
+    controlsDiv.classList.add('extra-networks-controls-div');
+    tabnav.appendChild(controlsDiv);
+    tabnav.insertBefore(controlsDiv, null);
+
+    var this_tab = gradioApp().querySelector('#' + tabname + '_extra_tabs');
+    this_tab.querySelectorAll(":scope > [id^='" + tabname + "_']").forEach(function(elem) {
+        var tabname_full = elem.id;
+        var search = gradioApp().querySelector("#" + tabname_full + "_extra_search");
+        var sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
+        var refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
+        var currentSort = '';
+
+        if (!search || !sort_dir || !refresh) {
+            return;
+        }
+
+        var applyFilter = function(force) {
+            var searchTerm = search.value.toLowerCase();
+            gradioApp().querySelectorAll('#' + tabname + '_extra_tabs div.card').forEach(function(elem) {
+                var searchOnly = elem.querySelector('.search_only');
+                var text = Array.prototype.map.call(elem.querySelectorAll('.search_terms, .description'), function(t) {
+                    return t.textContent.toLowerCase();
+                }).join(" ");
+
+                var visible = text.indexOf(searchTerm) != -1;
+                if (searchOnly && searchTerm.length < 4) {
+                    visible = false;
+                }
+                if (visible) {
+                    elem.classList.remove("hidden");
+                } else {
+                    elem.classList.add("hidden");
+                }
+            });
+
+            applySort(force);
+        };
+
+        var applySort = function(force) {
+            var cards = gradioApp().querySelectorAll('#' + tabname_full + ' div.card');
+            var parent = gradioApp().querySelector('#' + tabname_full + "_cards");
+            var reverse = sort_dir.dataset.sortdir == "Descending";
+            var activeSearchElem = gradioApp().querySelector('#' + tabname_full + "_controls .extra-network-control--sort.extra-network-control--enabled");
+            var sortKey = activeSearchElem ? activeSearchElem.dataset.sortkey : "default";
+            var sortKeyDataField = "sort" + sortKey.charAt(0).toUpperCase() + sortKey.slice(1);
+            var sortKeyStore = sortKey + "-" + sort_dir.dataset.sortdir + "-" + cards.length;
+
+            if (sortKeyStore == currentSort && !force) {
+                return;
+            }
+            currentSort = sortKeyStore;
+
+            var sortedCards = Array.from(cards);
+            sortedCards.sort(function(cardA, cardB) {
+                var a = cardA.dataset[sortKeyDataField];
+                var b = cardB.dataset[sortKeyDataField];
+                if (!isNaN(a) && !isNaN(b)) {
+                    return parseInt(a) - parseInt(b);
+                }
+                return (a < b ? -1 : (a > b ? 1 : 0));
+            });
+
+            if (reverse) {
+                sortedCards.reverse();
+            }
+
+            parent.innerHTML = '';
+            var frag = document.createDocumentFragment();
+            sortedCards.forEach(function(card) {
+                frag.appendChild(card);
+            });
+            parent.appendChild(frag);
+
+            // Update virtual scroll after sort
+            updateVirtualScroll(tabname_full);
+        };
+
+        search.addEventListener("input", function() {
+            applyFilter();
+        });
+        applySort();
+        applyFilter();
+
+        extraNetworksApplySort[tabname_full] = applySort;
+        extraNetworksApplyFilter[tabname_full] = applyFilter;
+
+        var controls = gradioApp().querySelector("#" + tabname_full + "_controls");
+        controlsDiv.insertBefore(controls, null);
+
+        if (elem.style.display != "none") {
+            extraNetworksShowControlsForPage(tabname, tabname_full);
+        }
+    });
+
+    registerPrompt(tabname, tabname + "_prompt");
+    registerPrompt(tabname, tabname + "_neg_prompt");
+}
+
+function extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt) {
+    if (!gradioApp().querySelector('.toprow-compact-tools')) return;
+
+    var promptContainer = gradioApp().getElementById(tabname + '_prompt_container');
+    var prompt = gradioApp().getElementById(tabname + '_prompt_row');
+    var negPrompt = gradioApp().getElementById(tabname + '_neg_prompt_row');
+    var elem = id ? gradioApp().getElementById(id) : null;
+
+    if (showNegativePrompt && elem) {
+        elem.insertBefore(negPrompt, elem.firstChild);
+    } else {
+        promptContainer.insertBefore(negPrompt, promptContainer.firstChild);
+    }
+
+    if (showPrompt && elem) {
+        elem.insertBefore(prompt, elem.firstChild);
+    } else {
+        promptContainer.insertBefore(prompt, promptContainer.firstChild);
+    }
+
+    if (elem) {
+        elem.classList.toggle('extra-page-prompts-active', showNegativePrompt || showPrompt);
+    }
+}
+
+function extraNetworksShowControlsForPage(tabname, tabname_full) {
+    gradioApp().querySelectorAll('#' + tabname + '_extra_tabs .extra-networks-controls-div > div').forEach(function(elem) {
+        var targetId = tabname_full + "_controls";
+        elem.style.display = elem.id == targetId ? "" : "none";
+    });
+}
+
+function extraNetworksUnrelatedTabSelected(tabname) {
+    extraNetworksMovePromptToTab(tabname, '', false, false);
+    extraNetworksShowControlsForPage(tabname, null);
+}
+
+function extraNetworksTabSelected(tabname, id, showPrompt, showNegativePrompt, tabname_full) {
+    extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
+    extraNetworksShowControlsForPage(tabname, tabname_full);
+}
+
+function applyExtraNetworkFilter(tabname_full) {
+    var doFilter = function() {
+        var applyFunction = extraNetworksApplyFilter[tabname_full];
+        if (applyFunction) {
+            applyFunction(true);
+        }
+    };
+    setTimeout(doFilter, 1);
+}
+
+function applyExtraNetworkSort(tabname_full) {
+    var doSort = function() {
+        extraNetworksApplySort[tabname_full](true);
+    };
+    setTimeout(doSort, 1);
+}
+
+var extraNetworksApplyFilter = {};
+var extraNetworksApplySort = {};
+var activePromptTextarea = {};
+
+function setupExtraNetworks() {
+    setupExtraNetworksForTab('txt2img');
+    setupExtraNetworksForTab('img2img');
+}
+
+var re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/s;
+var re_extranet_g = /<([^:^>]+:[^:]+):[\d.]+>/g;
+var re_extranet_neg = /\(([^:^>]+:[\d.]+)\)/;
+var re_extranet_g_neg = /\(([^:^>]+:[\d.]+)\)/g;
+
+function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
+    var m = text.match(isNeg ? re_extranet_neg : re_extranet);
+    var replaced = false;
+    var newTextareaText;
+    var extraTextBeforeNet = opts.extra_networks_add_text_separator;
+    if (m) {
+        var extraTextAfterNet = m[2];
+        var partToSearch = m[1];
+        var foundAtPosition = -1;
+        newTextareaText = textarea.value.replaceAll(isNeg ? re_extranet_g_neg : re_extranet_g, function(found, net, pos) {
+            m = found.match(isNeg ? re_extranet_neg : re_extranet);
+            if (m[1] == partToSearch) {
+                replaced = true;
+                foundAtPosition = pos;
+                return "";
+            }
+            return found;
+        });
+        if (foundAtPosition >= 0) {
+            if (extraTextAfterNet && newTextareaText.substr(foundAtPosition, extraTextAfterNet.length) == extraTextAfterNet) {
+                newTextareaText = newTextareaText.substr(0, foundAtPosition) + newTextareaText.substr(foundAtPosition + extraTextAfterNet.length);
+            }
+            if (newTextareaText.substr(foundAtPosition - extraTextBeforeNet.length, extraTextBeforeNet.length) == extraTextBeforeNet) {
+                newTextareaText = newTextareaText.substr(0, foundAtPosition - extraTextBeforeNet.length) + newTextareaText.substr(foundAtPosition);
+            }
+        }
+    } else {
+        newTextareaText = textarea.value.replaceAll(new RegExp(`((?:${extraTextBeforeNet})?${text})`, "g"), "");
+        replaced = (newTextareaText != textarea.value);
+    }
+
+    if (replaced) {
+        textarea.value = newTextareaText;
+        return true;
+    }
+
+    return false;
+}
+
+function updatePromptArea(text, textArea, isNeg) {
+    if (!tryToRemoveExtraNetworkFromPrompt(textArea, text, isNeg)) {
+        textArea.value = textArea.value + opts.extra_networks_add_text_separator + text;
+    }
+
+    updateInput(textArea);
+}
+
+function cardClicked(tabname, textToAdd, textToAddNegative, allowNegativePrompt) {
+    if (textToAddNegative.length > 0) {
+        updatePromptArea(textToAdd, gradioApp().querySelector("#" + tabname + "_prompt > label > textarea"));
+        updatePromptArea(textToAddNegative, gradioApp().querySelector("#" + tabname + "_neg_prompt > label > textarea"), true);
+    } else {
+        var textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector("#" + tabname + "_prompt > label > textarea");
+        updatePromptArea(textToAdd, textarea);
+    }
+}
+
+function saveCardPreview(event, tabname, filename) {
+    var textarea = gradioApp().querySelector("#" + tabname + '_preview_filename  > label > textarea');
+    var button = gradioApp().getElementById(tabname + '_save_preview');
+
+    textarea.value = filename;
+    updateInput(textarea);
+
+    button.click();
+
+    event.stopPropagation();
+    event.preventDefault();
+}
+
+function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
+    var searchTextarea = gradioApp().querySelector("#" + tabname + "_" + extra_networks_tabname + "_extra_search");
+    var button = event.target;
+    var text = button.classList.contains("search-all") ? "" : button.textContent.trim();
+
+    searchTextarea.value = text;
+    updateInput(searchTextarea);
+}
+
+function extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_networks_tabname) {
+    var ul = btn.nextElementSibling;
+    var true_targ = event.target;
+
+    function _expand_or_collapse(_ul, _btn) {
+        if (_ul.hasAttribute("hidden")) {
+            _ul.removeAttribute("hidden");
+            _btn.dataset.expanded = "";
+        } else {
+            _ul.setAttribute("hidden", "");
+            delete _btn.dataset.expanded;
+        }
+    }
+
+    function _remove_selected_from_all() {
+        var sels = document.querySelectorAll("div.tree-list-content");
+        [...sels].forEach(el => {
+            delete el.dataset.selected;
+        });
+    }
+
+    function _select_button(_btn) {
+        _remove_selected_from_all();
+        _btn.dataset.selected = "";
+    }
+
+    function _update_search(_tabname, _extra_networks_tabname, _search_text) {
+        var search_input_elem = gradioApp().querySelector("#" + tabname + "_" + extra_networks_tabname + "_extra_search");
+        search_input_elem.value = _search_text;
+        updateInput(search_input_elem);
+    }
+
+    if (true_targ.matches(".tree-list-item-action--leading, .tree-list-item-action-chevron")) {
+        _expand_or_collapse(ul, btn);
+    } else {
+        if ("selected" in btn.dataset && !(ul.hasAttribute("hidden"))) {
+            _expand_or_collapse(ul, btn);
+            delete btn.dataset.selected;
+            _update_search(tabname, extra_networks_tabname, "");
+        } else if (!(!("selected" in btn.dataset) && !(ul.hasAttribute("hidden")))) {
+            _expand_or_collapse(ul, btn);
+            _select_button(btn, tabname, extra_networks_tabname);
+            _update_search(tabname, extra_networks_tabname, btn.dataset.path);
+        } else {
+            _select_button(btn, tabname, extra_networks_tabname);
+            _update_search(tabname, extra_networks_tabname, btn.dataset.path);
+        }
+    }
+}
+
+function extraNetworksTreeOnClick(event, tabname, extra_networks_tabname) {
+    var btn = event.currentTarget;
+    var par = btn.parentElement;
+    if (par.dataset.treeEntryType === "file") {
+        extraNetworksTreeProcessFileClick(event, btn, tabname, extra_networks_tabname);
+    } else {
+        extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_networks_tabname);
+    }
+}
+
+function extraNetworksControlSortOnClick(event, tabname, extra_networks_tabname) {
+    var self = event.currentTarget;
+    var parent = event.currentTarget.parentElement;
+
+    parent.querySelectorAll('.extra-network-control--sort').forEach(function(x) {
+        x.classList.remove('extra-network-control--enabled');
+    });
+
+    self.classList.add('extra-network-control--enabled');
+
+    applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+}
+
+function extraNetworksControlSortDirOnClick(event, tabname, extra_networks_tabname) {
+    if (event.currentTarget.dataset.sortdir == "Ascending") {
+        event.currentTarget.dataset.sortdir = "Descending";
+        event.currentTarget.setAttribute("title", "Sort descending");
+    } else {
+        event.currentTarget.dataset.sortdir = "Ascending";
+        event.currentTarget.setAttribute("title", "Sort ascending");
+    }
+    applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+}
+
+function extraNetworksControlTreeViewOnClick(event, tabname, extra_networks_tabname) {
+    var button = event.currentTarget;
+    button.classList.toggle("extra-network-control--enabled");
+    
+    var pane = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_pane");
+    pane.classList.toggle("extra-network-dirs-hidden");
+
+    var tree = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_tree");
+    var cards = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_cards");
+    var resizeHandle = pane.querySelector('.resize-handle');
+
+    if (pane.classList.contains("extra-network-dirs-hidden")) {
+        tree.style.display = 'none';
+        cards.style.flexGrow = '1';
+        cards.style.width = '100%';
+        if (resizeHandle) resizeHandle.style.display = 'none';
+    } else {
+        tree.style.display = 'block';
+        cards.style.flexGrow = '1';
+        cards.style.width = 'auto';
+        if (resizeHandle) resizeHandle.style.display = 'block';
+    }
+}
+
+function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
+    var searchTextarea = gradioApp().querySelector("#" + tabname + "_" + extra_networks_tabname + "_extra_search");
+    var button = event.target;
+    var text = button.classList.contains("search-all") ? "" : button.textContent.trim();
+
+    searchTextarea.value = text;
+    updateInput(searchTextarea);
+}
+
+function extraNetworksControlRefreshOnClick(event, tabname, extra_networks_tabname) {
+    var btn_refresh_internal = gradioApp().getElementById(tabname + "_" + extra_networks_tabname + "_extra_refresh_internal");
+    btn_refresh_internal.dispatchEvent(new Event("click"));
+}
+
+var globalPopup = null;
+var globalPopupInner = null;
+
+function closePopup() {
+    if (!globalPopup) return;
+    globalPopup.style.display = "none";
+}
+
+function popup(contents) {
+    if (!globalPopup) {
+        globalPopup = document.createElement('div');
+        globalPopup.classList.add('global-popup');
+
+        var close = document.createElement('div');
+        close.classList.add('global-popup-close');
+        close.addEventListener("click", closePopup);
+        close.title = "Close";
+        globalPopup.appendChild(close);
+
+        globalPopupInner = document.createElement('div');
+        globalPopupInner.classList.add('global-popup-inner');
+        globalPopup.appendChild(globalPopupInner);
+
+        gradioApp().querySelector('.main').appendChild(globalPopup);
+    }
+
+    globalPopupInner.innerHTML = '';
+    globalPopupInner.appendChild(contents);
+
+    globalPopup.style.display = "flex";
+}
+
+var storedPopupIds = {};
+function popupId(id) {
+    if (!storedPopupIds[id]) {
+        storedPopupIds[id] = gradioApp().getElementById(id);
+    }
+
+    popup(storedPopupIds[id]);
+}
+
+function extraNetworksFlattenMetadata(obj) {
+    const result = {};
+
+    for (const key of Object.keys(obj)) {
+        if (typeof obj[key] === 'string') {
+            try {
+                const parsed = JSON.parse(obj[key]);
+                if (parsed && typeof parsed === 'object') {
+                    obj[key] = parsed;
+                }
+            } catch (error) {
+                continue;
+            }
+        }
+    }
+
+    for (const key of Object.keys(obj)) {
+        if (typeof obj[key] === 'object' && obj[key] !== null) {
+            const nested = extraNetworksFlattenMetadata(obj[key]);
+            for (const nestedKey of Object.keys(nested)) {
+                result[`${key}/${nestedKey}`] = nested[nestedKey];
+            }
+        } else {
+            result[key] = obj[key];
+        }
+    }
+
+    for (const key of Object.keys(result)) {
+        if (key.startsWith("modelspec.")) {
+            result[key.replaceAll(".", "/")] = result[key];
+            delete result[key];
+        }
+    }
+
+    for (const key of Object.keys(result)) {
+        const parts = key.split("/");
+        for (let i = 1; i < parts.length; i++) {
+            const parent = parts.slice(0, i).join("/");
+            if (!result[parent]) {
+                result[parent] = "";
+            }
+        }
+    }
+
+    return result;
+}
+
+function extraNetworksShowMetadata(text) {
+    try {
+        let parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+            parsed = extraNetworksFlattenMetadata(parsed);
+            const table = createVisualizationTable(parsed, 0);
+            popup(table);
+            return;
+        }
+    } catch (error) {
+        console.error(error);
+    }
+    
+    var elem = document.createElement('pre');
+    elem.classList.add('popup-metadata');
+    elem.textContent = text;
+
+    popup(elem);
+}
+
+function requestGet(url, data, handler, errorHandler) {
+    var xhr = new XMLHttpRequest();
+    var args = Object.keys(data).map(function(k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
+    }).join('&');
+    xhr.open("GET", url + "?" + args, true);
+
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    var js = JSON.parse(xhr.responseText);
+                    handler(js);
+                } catch (error) {
+                    console.error(error);
+                    errorHandler();
+                }
+            } else {
+                errorHandler();
+            }
+        }
+    };
+    var js = JSON.stringify(data);
+    xhr.send(js);
+}
+
+function extraNetworksCopyCardPath(event) {
+    navigator.clipboard.writeText(event.target.getAttribute("data-clipboard-text"));
+    event.stopPropagation();
+}
+
+function extraNetworksRequestMetadata(event, extraPage) {
+    var showError = function() {
+        extraNetworksShowMetadata("there was an error getting metadata");
+    };
+
+    var cardName = event.target.parentElement.parentElement.getAttribute("data-name");
+
+    requestGet("./sd_extra_networks/metadata", {page: extraPage, item: cardName}, function(data) {
+        if (data && data.metadata) {
+            extraNetworksShowMetadata(data.metadata);
+        } else {
+            showError();
+        }
+    }, showError);
+
+    event.stopPropagation();
+}
+
+var extraPageUserMetadataEditors = {};
+
+function extraNetworksEditUserMetadata(event, tabname, extraPage) {
+    var id = tabname + '_' + extraPage + '_edit_user_metadata';
+
+    var editor = extraPageUserMetadataEditors[id];
+    if (!editor) {
+        editor = {};
+        editor.page = gradioApp().getElementById(id);
+        editor.nameTextarea = gradioApp().querySelector("#" + id + "_name" + ' textarea');
+        editor.button = gradioApp().querySelector("#" + id + "_button");
+        extraPageUserMetadataEditors[id] = editor;
+    }
+    
+    var cardName = event.target.parentElement.parentElement.getAttribute("data-name");
+
+    editor.nameTextarea.value = cardName;
+    updateInput(editor.nameTextarea);
+
+    editor.button.click();
+
+    popup(editor.page);
+
+    event.stopPropagation();
+}
+
+function extraNetworksRefreshSingleCard(page, tabname, name) {
+    requestGet("./sd_extra_networks/get-single-card", {page: page, tabname: tabname, name: name}, function(data) {
+        if (data && data.html) {
+            var card = gradioApp().querySelector(`#${tabname}_${page.replace(" ", "_")}_cards > .card[data-name="${name}"]`);
+
+            var newDiv = document.createElement('DIV');
+            newDiv.innerHTML = data.html;
+            var newCard = newDiv.firstElementChild;
+
+            newCard.style.display = '';
+            card.parentElement.insertBefore(newCard, card);
+            card.parentElement.removeChild(card);
+        }
+    });
+}
+
+window.addEventListener("keydown", function(event) {
+    if (event.key == "Escape") {
+        closePopup();
+    }
+});
+
+var uiAfterScriptsCallbacks = [];
+var uiAfterScriptsTimeout = null;
+var executedAfterScripts = false;
+
+function scheduleAfterScriptsCallbacks() {
+    clearTimeout(uiAfterScriptsTimeout);
+    uiAfterScriptsTimeout = setTimeout(function() {
+        executeCallbacks(uiAfterScriptsCallbacks);
+    }, 200);
+}
+
+onUiLoaded(function() {
+    var mutationObserver = new MutationObserver(function(m) {
+        let existingSearchfields = gradioApp().querySelectorAll("[id$='_extra_search']").length;
+        let neededSearchfields = gradioApp().querySelectorAll("[id$='_extra_tabs'] > .tab-nav > button").length - 2;
+
+        if (!executedAfterScripts && existingSearchfields >= neededSearchfields) {
+            mutationObserver.disconnect();
+            executedAfterScripts = true;
+            scheduleAfterScriptsCallbacks();
+        }
+    });
+    mutationObserver.observe(gradioApp(), {childList: true, subtree: true});
+});
+
+uiAfterScriptsCallbacks.push(setupExtraNetworks);
+```
+
+```generationParams.js
+// attaches listeners to the txt2img and img2img galleries to update displayed generation param text when the image changes
+
+let txt2img_gallery, img2img_gallery, modal = undefined;
+onAfterUiUpdate(function() {
+    if (!txt2img_gallery) {
+        txt2img_gallery = attachGalleryListeners("txt2img");
+    }
+    if (!img2img_gallery) {
+        img2img_gallery = attachGalleryListeners("img2img");
+    }
+    if (!modal) {
+        modal = gradioApp().getElementById('lightboxModal');
+        modalObserver.observe(modal, {attributes: true, attributeFilter: ['style']});
+    }
+});
+
+let modalObserver = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutationRecord) {
+        let selectedTab = gradioApp().querySelector('#tabs div button.selected')?.innerText;
+        if (mutationRecord.target.style.display === 'none' && (selectedTab === 'txt2img' || selectedTab === 'img2img')) {
+            gradioApp().getElementById(selectedTab + "_generation_info_button")?.click();
+        }
+    });
+});
+
+function attachGalleryListeners(tab_name) {
+    var gallery = gradioApp().querySelector('#' + tab_name + '_gallery');
+    gallery?.addEventListener('click', () => gradioApp().getElementById(tab_name + "_generation_info_button").click());
+    gallery?.addEventListener('keydown', (e) => {
+        if (e.keyCode == 37 || e.keyCode == 39) { // left or right arrow
+            gradioApp().getElementById(tab_name + "_generation_info_button").click();
+        }
+    });
+    return gallery;
+}
+
+```
+
+```hints.js
+// mouseover tooltips for various UI elements
+
+var titles = {
+    "Sampling steps": "How many times to improve the generated image iteratively; higher values take longer; very low values can produce bad results",
+    "Sampling method": "Which algorithm to use to produce the image",
+    "GFPGAN": "Restore low quality faces using GFPGAN neural network",
+    "Euler a": "Euler Ancestral - very creative, each can get a completely different picture depending on step count, setting steps higher than 30-40 does not help",
+    "DDIM": "Denoising Diffusion Implicit Models - best at inpainting",
+    "UniPC": "Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models",
+    "DPM adaptive": "Ignores step count - uses a number of steps determined by the CFG and resolution",
+
+    "\u{1F4D0}": "Auto detect size from img2img",
+    "Batch count": "How many batches of images to create (has no impact on generation performance or VRAM usage)",
+    "Batch size": "How many image to create in a single batch (increases generation performance at cost of higher VRAM usage)",
+    "CFG Scale": "Classifier Free Guidance Scale - how strongly the image should conform to prompt - lower values produce more creative results",
+    "Seed": "A value that determines the output of random number generator - if you create an image with same parameters and seed as another image, you'll get the same result",
+    "\u{1f3b2}\ufe0f": "Set seed to -1, which will cause a new random number to be used every time",
+    "\u267b\ufe0f": "Reuse seed from last generation, mostly useful if it was randomized",
+    "\u2199\ufe0f": "Read generation parameters from prompt or last generation if prompt is empty into user interface.",
+    "\u{1f4c2}": "Open images output directory",
+    "\u{1f4be}": "Save style",
+    "\u{1f5d1}\ufe0f": "Clear prompt",
+    "\u{1f4cb}": "Apply selected styles to current prompt",
+    "\u{1f4d2}": "Paste available values into the field",
+    "\u{1f3b4}": "Show/hide extra networks",
+    "\u{1f300}": "Restore progress",
+
+    "Inpaint a part of image": "Draw a mask over an image, and the script will regenerate the masked area with content according to prompt",
+    "SD upscale": "Upscale image normally, split result into tiles, improve each tile using img2img, merge whole image back",
+
+    "Just resize": "Resize image to target resolution. Unless height and width match, you will get incorrect aspect ratio.",
+    "Crop and resize": "Resize the image so that entirety of target resolution is filled with the image. Crop parts that stick out.",
+    "Resize and fill": "Resize the image so that entirety of image is inside target resolution. Fill empty space with image's colors.",
+
+    "Mask blur": "How much to blur the mask before processing, in pixels.",
+    "Masked content": "What to put inside the masked area before processing it with Stable Diffusion.",
+    "fill": "fill it with colors of the image",
+    "original": "keep whatever was there originally",
+    "latent noise": "fill it with latent space noise",
+    "latent nothing": "fill it with latent space zeroes",
+    "Inpaint at full resolution": "Upscale masked region to target resolution, do inpainting, downscale back and paste into original image",
+
+    "Denoising strength": "Determines how little respect the algorithm should have for image's content. At 0, nothing will change, and at 1 you'll get an unrelated image. With values below 1.0, processing will take less steps than the Sampling Steps slider specifies.",
+
+    "Skip": "Stop processing current image and continue processing.",
+    "Interrupt": "Stop processing images and return any results accumulated so far.",
+    "Save": "Write image to a directory (default - log/images) and generation parameters into csv file.",
+
+    "X values": "Separate values for X axis using commas.",
+    "Y values": "Separate values for Y axis using commas.",
+
+    "None": "Do not do anything special",
+    "Prompt matrix": "Separate prompts into parts using vertical pipe character (|) and the script will create a picture for every combination of them (except for the first part, which will be present in all combinations)",
+    "X/Y/Z plot": "Create grid(s) where images will have different parameters. Use inputs below to specify which parameters will be shared by columns and rows",
+    "Custom code": "Run Python code. Advanced user only. Must run program with --allow-code for this to work",
+
+    "Prompt S/R": "Separate a list of words with commas, and the first word will be used as a keyword: script will search for this word in the prompt, and replace it with others",
+    "Prompt order": "Separate a list of words with commas, and the script will make a variation of prompt with those words for their every possible order",
+
+    "Tiling": "Produce an image that can be tiled.",
+    "Tile overlap": "For SD upscale, how much overlap in pixels should there be between tiles. Tiles overlap so that when they are merged back into one picture, there is no clearly visible seam.",
+
+    "Variation seed": "Seed of a different picture to be mixed into the generation.",
+    "Variation strength": "How strong of a variation to produce. At 0, there will be no effect. At 1, you will get the complete picture with variation seed (except for ancestral samplers, where you will just get something).",
+    "Resize seed from height": "Make an attempt to produce a picture similar to what would have been produced with same seed at specified resolution",
+    "Resize seed from width": "Make an attempt to produce a picture similar to what would have been produced with same seed at specified resolution",
+
+    "Interrogate": "Reconstruct prompt from existing image and put it into the prompt field.",
+
+    "Images filename pattern": "Use tags like [seed] and [date] to define how filenames for images are chosen. Leave empty for default.",
+    "Directory name pattern": "Use tags like [seed] and [date] to define how subdirectories for images and grids are chosen. Leave empty for default.",
+    "Max prompt words": "Set the maximum number of words to be used in the [prompt_words] option; ATTENTION: If the words are too long, they may exceed the maximum length of the file path that the system can handle",
+
+    "Loopback": "Performs img2img processing multiple times. Output images are used as input for the next loop.",
+    "Loops": "How many times to process an image. Each output is used as the input of the next loop. If set to 1, behavior will be as if this script were not used.",
+    "Final denoising strength": "The denoising strength for the final loop of each image in the batch.",
+    "Denoising strength curve": "The denoising curve controls the rate of denoising strength change each loop. Aggressive: Most of the change will happen towards the start of the loops. Linear: Change will be constant through all loops. Lazy: Most of the change will happen towards the end of the loops.",
+
+    "Style 1": "Style to apply; styles have components for both positive and negative prompts and apply to both",
+    "Style 2": "Style to apply; styles have components for both positive and negative prompts and apply to both",
+    "Apply style": "Insert selected styles into prompt fields",
+    "Create style": "Save current prompts as a style. If you add the token {prompt} to the text, the style uses that as a placeholder for your prompt when you use the style in the future.",
+
+    "Checkpoint name": "Loads weights from checkpoint before making images. You can either use hash or a part of filename (as seen in settings) for checkpoint name. Recommended to use with Y axis for less switching.",
+    "Inpainting conditioning mask strength": "Only applies to inpainting models. Determines how strongly to mask off the original image for inpainting and img2img. 1.0 means fully masked, which is the default behaviour. 0.0 means a fully unmasked conditioning. Lower values will help preserve the overall composition of the image, but will struggle with large changes.",
+
+    "Eta noise seed delta": "If this values is non-zero, it will be added to seed and used to initialize RNG for noises when using samplers with Eta. You can use this to produce even more variation of images, or you can use this to match images of other software if you know what you are doing.",
+
+    "Filename word regex": "This regular expression will be used extract words from filename, and they will be joined using the option below into label text used for training. Leave empty to keep filename text as it is.",
+    "Filename join string": "This string will be used to join split words into a single line if the option above is enabled.",
+
+    "Quicksettings list": "List of setting names, separated by commas, for settings that should go to the quick access bar at the top, rather than the usual setting tab. See modules/shared.py for setting names. Requires restarting to apply.",
+
+    "Weighted sum": "Result = A * (1 - M) + B * M",
+    "Add difference": "Result = A + (B - C) * M",
+    "No interpolation": "Result = A",
+
+    "Initialization text": "If the number of tokens is more than the number of vectors, some may be skipped.\nLeave the textbox empty to start with zeroed out vectors",
+    "Learning rate": "How fast should training go. Low values will take longer to train, high values may fail to converge (not generate accurate results) and/or may break the embedding (This has happened if you see Loss: nan in the training info textbox. If this happens, you need to manually restore your embedding from an older not-broken backup).\n\nYou can set a single numeric value, or multiple learning rates using the syntax:\n\n   rate_1:max_steps_1, rate_2:max_steps_2, ...\n\nEG:   0.005:100, 1e-3:1000, 1e-5\n\nWill train with rate of 0.005 for first 100 steps, then 1e-3 until 1000 steps, then 1e-5 for all remaining steps.",
+
+    "Clip skip": "Early stopping parameter for CLIP model; 1 is stop at last layer as usual, 2 is stop at penultimate layer, etc.",
+
+    "Approx NN": "Cheap neural network approximation. Very fast compared to VAE, but produces pictures with 4 times smaller horizontal/vertical resolution and lower quality.",
+    "Approx cheap": "Very cheap approximation. Very fast compared to VAE, but produces pictures with 8 times smaller horizontal/vertical resolution and extremely low quality.",
+
+    "Hires. fix": "Use a two step process to partially create an image at smaller resolution, upscale, and then improve details in it without changing composition",
+    "Hires steps": "Number of sampling steps for upscaled picture. If 0, uses same as for original.",
+    "Upscale by": "Adjusts the size of the image by multiplying the original width and height by the selected value. Ignored if either Resize width to or Resize height to are non-zero.",
+    "Resize width to": "Resizes image to this width. If 0, width is inferred from either of two nearby sliders.",
+    "Resize height to": "Resizes image to this height. If 0, height is inferred from either of two nearby sliders.",
+    "Discard weights with matching name": "Regular expression; if weights's name matches it, the weights is not written to the resulting checkpoint. Use ^model_ema to discard EMA weights.",
+    "Extra networks tab order": "Comma-separated list of tab names; tabs listed here will appear in the extra networks UI first and in order listed.",
+    "Negative Guidance minimum sigma": "Skip negative prompt for steps where image is already mostly denoised; the higher this value, the more skips there will be; provides increased performance in exchange for minor quality reduction."
+};
+
+function updateTooltip(element) {
+    if (element.title) return; // already has a title
+
+    let text = element.textContent;
+    let tooltip = localization[titles[text]] || titles[text];
+
+    if (!tooltip) {
+        let value = element.value;
+        if (value) tooltip = localization[titles[value]] || titles[value];
+    }
+
+    if (!tooltip) {
+        // Gradio dropdown options have `data-value`.
+        let dataValue = element.dataset.value;
+        if (dataValue) tooltip = localization[titles[dataValue]] || titles[dataValue];
+    }
+
+    if (!tooltip) {
+        for (const c of element.classList) {
+            if (c in titles) {
+                tooltip = localization[titles[c]] || titles[c];
+                break;
+            }
+        }
+    }
+
+    if (tooltip) {
+        element.title = tooltip;
+    }
+}
+
+// Nodes to check for adding tooltips.
+const tooltipCheckNodes = new Set();
+// Timer for debouncing tooltip check.
+let tooltipCheckTimer = null;
+
+function processTooltipCheckNodes() {
+    for (const node of tooltipCheckNodes) {
+        updateTooltip(node);
+    }
+    tooltipCheckNodes.clear();
+}
+
+onUiUpdate(function(mutationRecords) {
+    for (const record of mutationRecords) {
+        if (record.type === "childList" && record.target.classList.contains("options")) {
+            // This smells like a Gradio dropdown menu having changed,
+            // so let's enqueue an update for the input element that shows the current value.
+            let wrap = record.target.parentNode;
+            let input = wrap?.querySelector("input");
+            if (input) {
+                input.title = ""; // So we'll even have a chance to update it.
+                tooltipCheckNodes.add(input);
+            }
+        }
+        for (const node of record.addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE && !node.classList.contains("hide")) {
+                if (!node.title) {
+                    if (
+                        node.tagName === "SPAN" ||
+                        node.tagName === "BUTTON" ||
+                        node.tagName === "P" ||
+                        node.tagName === "INPUT" ||
+                        (node.tagName === "LI" && node.classList.contains("item")) // Gradio dropdown item
+                    ) {
+                        tooltipCheckNodes.add(node);
+                    }
+                }
+                node.querySelectorAll('span, button, p').forEach(n => tooltipCheckNodes.add(n));
+            }
+        }
+    }
+    if (tooltipCheckNodes.size) {
+        clearTimeout(tooltipCheckTimer);
+        tooltipCheckTimer = setTimeout(processTooltipCheckNodes, 1000);
+    }
+});
+
+onUiLoaded(function() {
+    for (var comp of window.gradio_config.components) {
+        if (comp.props.webui_tooltip && comp.props.elem_id) {
+            var elem = gradioApp().getElementById(comp.props.elem_id);
+            if (elem) {
+                elem.title = comp.props.webui_tooltip;
+            }
+        }
+    }
+});
+
+```
+
+```hires_fix.js
+function onCalcResolutionHires(enable, width, height, hr_scale, hr_resize_x, hr_resize_y) {
+    function setInactive(elem, inactive) {
+        elem.classList.toggle('inactive', !!inactive);
+    }
+
+    var hrUpscaleBy = gradioApp().getElementById('txt2img_hr_scale');
+    var hrResizeX = gradioApp().getElementById('txt2img_hr_resize_x');
+    var hrResizeY = gradioApp().getElementById('txt2img_hr_resize_y');
+    var hrCfgScale = gradioApp().getElementById('txt2img_hr_cfg');
+
+    gradioApp().getElementById('txt2img_hires_fix_row2').style.display = opts.use_old_hires_fix_width_height ? "none" : "";
+
+    setInactive(hrUpscaleBy, opts.use_old_hires_fix_width_height || hr_resize_x > 0 || hr_resize_y > 0);
+    setInactive(hrResizeX, opts.use_old_hires_fix_width_height || hr_resize_x == 0);
+    setInactive(hrResizeY, opts.use_old_hires_fix_width_height || hr_resize_y == 0);
+
+    return [enable, width, height, hr_scale, hr_resize_x, hr_resize_y];
+}
+
+function updateHrCfgScaleState() {
+    const hrCfgScale = gradioApp().getElementById('txt2img_hr_cfg');
+    if (hrCfgScale) {
+        const input = hrCfgScale.querySelector('input');
+        if (input) {
+            const value = parseFloat(input.value);
+            hrCfgScale.classList.toggle('inactive', value === 0);
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const hrCfgScale = gradioApp().getElementById('txt2img_hr_cfg');
+    if (hrCfgScale) {
+        const input = hrCfgScale.querySelector('input');
+        if (input) {
+            input.addEventListener('input', updateHrCfgScaleState);
+            input.addEventListener('change', updateHrCfgScaleState);
+            
+            updateHrCfgScaleState();
+        }
+    }
+});
+
+onUiUpdate(function() {
+    updateHrCfgScaleState();
+});
+```
+
+```imageMaskFix.js
+/**
+ * temporary fix for https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/668
+ * @see https://github.com/gradio-app/gradio/issues/1721
+ */
+function imageMaskResize() {
+    const canvases = gradioApp().querySelectorAll('#img2maskimg .touch-none canvas');
+    if (!canvases.length) {
+        window.removeEventListener('resize', imageMaskResize);
+        return;
+    }
+
+    const wrapper = canvases[0].closest('.touch-none');
+    const previewImage = wrapper.previousElementSibling;
+
+    if (!previewImage.complete) {
+        previewImage.addEventListener('load', imageMaskResize);
+        return;
+    }
+
+    const w = previewImage.width;
+    const h = previewImage.height;
+    const nw = previewImage.naturalWidth;
+    const nh = previewImage.naturalHeight;
+    const portrait = nh > nw;
+
+    const wW = Math.min(w, portrait ? h / nh * nw : w / nw * nw);
+    const wH = Math.min(h, portrait ? h / nh * nh : w / nw * nh);
+
+    wrapper.style.width = `${wW}px`;
+    wrapper.style.height = `${wH}px`;
+    wrapper.style.left = `0px`;
+    wrapper.style.top = `0px`;
+
+    canvases.forEach(c => {
+        c.style.width = c.style.height = '';
+        c.style.maxWidth = '100%';
+        c.style.maxHeight = '100%';
+        c.style.objectFit = 'contain';
+    });
+}
+
+onAfterUiUpdate(imageMaskResize);
+window.addEventListener('resize', imageMaskResize);
+
+```
+
+```imageviewer.js
+// A full size 'lightbox' preview modal shown when left clicking on gallery previews
+function closeModal() {
+    gradioApp().getElementById("lightboxModal").style.display = "none";
+}
+
+function showModal(event) {
+    const source = event.target || event.srcElement;
+    const modalImage = gradioApp().getElementById("modalImage");
+    const modalToggleLivePreviewBtn = gradioApp().getElementById("modal_toggle_live_preview");
+    modalToggleLivePreviewBtn.innerHTML = opts.js_live_preview_in_modal_lightbox ? "&#x1F5C7;" : "&#x1F5C6;";
+    const lb = gradioApp().getElementById("lightboxModal");
+    modalImage.src = source.src;
+    if (modalImage.style.display === 'none') {
+        lb.style.setProperty('background-image', 'url(' + source.src + ')');
+    }
+    updateModalImage();
+    lb.style.display = "flex";
+    lb.focus();
+
+    const tabTxt2Img = gradioApp().getElementById("tab_txt2img");
+    const tabImg2Img = gradioApp().getElementById("tab_img2img");
+    // show the save button in modal only on txt2img or img2img tabs
+    if (tabTxt2Img.style.display != "none" || tabImg2Img.style.display != "none") {
+        gradioApp().getElementById("modal_save").style.display = "inline";
+    } else {
+        gradioApp().getElementById("modal_save").style.display = "none";
+    }
+    event.stopPropagation();
+}
+
+function negmod(n, m) {
+    return ((n % m) + m) % m;
+}
+
+function updateModalImage() {
+    const modalImage = gradioApp().getElementById("modalImage");
+    let currentButton = selected_gallery_button();
+    let preview = gradioApp().querySelectorAll('.livePreview > img');
+    if (opts.js_live_preview_in_modal_lightbox && preview.length > 0) {
+        // show preview image if available
+        modalImage.src = preview[preview.length - 1].src;
+    } else if (currentButton?.children?.length > 0 && modalImage.src != currentButton.children[0].src) {
+        modalImage.src = currentButton.children[0].src;
+        if (modalImage.style.display === 'none') {
+            const modal = gradioApp().getElementById("lightboxModal");
+            modal.style.setProperty('background-image', `url(${modalImage.src})`);
+        }
+    }
+}
+
+function updateOnBackgroundChange() {
+    const modalImage = gradioApp().getElementById("modalImage");
+    if (modalImage && modalImage.offsetParent) {
+        updateModalImage();
+    }
+}
+
+function modalImageSwitch(offset) {
+    var galleryButtons = all_gallery_buttons();
+
+    if (galleryButtons.length > 1) {
+        var result = selected_gallery_index();
+
+        if (result != -1) {
+            var nextButton = galleryButtons[negmod((result + offset), galleryButtons.length)];
+            nextButton.click();
+            const modalImage = gradioApp().getElementById("modalImage");
+            const modal = gradioApp().getElementById("lightboxModal");
+            modalImage.src = nextButton.children[0].src;
+            if (modalImage.style.display === 'none') {
+                modal.style.setProperty('background-image', `url(${modalImage.src})`);
+            }
+            setTimeout(function() {
+                modal.focus();
+            }, 10);
+        }
+    }
+}
+
+function saveImage() {
+    const tabTxt2Img = gradioApp().getElementById("tab_txt2img");
+    const tabImg2Img = gradioApp().getElementById("tab_img2img");
+    const saveTxt2Img = "save_txt2img";
+    const saveImg2Img = "save_img2img";
+    if (tabTxt2Img.style.display != "none") {
+        gradioApp().getElementById(saveTxt2Img).click();
+    } else if (tabImg2Img.style.display != "none") {
+        gradioApp().getElementById(saveImg2Img).click();
+    } else {
+        console.error("missing implementation for saving modal of this type");
+    }
+}
+
+function modalSaveImage(event) {
+    saveImage();
+    event.stopPropagation();
+}
+
+function modalNextImage(event) {
+    modalImageSwitch(1);
+    event.stopPropagation();
+}
+
+function modalPrevImage(event) {
+    modalImageSwitch(-1);
+    event.stopPropagation();
+}
+
+function modalKeyHandler(event) {
+    switch (event.key) {
+    case "s":
+        saveImage();
+        break;
+    case "ArrowLeft":
+        modalPrevImage(event);
+        break;
+    case "ArrowRight":
+        modalNextImage(event);
+        break;
+    case "Escape":
+        closeModal();
+        break;
+    }
+}
+
+function setupImageForLightbox(e) {
+    if (e.dataset.modded) {
+        return;
+    }
+
+    e.dataset.modded = true;
+    e.style.cursor = 'pointer';
+    e.style.userSelect = 'none';
+
+    e.addEventListener('mousedown', function(evt) {
+        if (evt.button == 1) {
+            open(evt.target.src);
+            evt.preventDefault();
+            return;
+        }
+    }, true);
+
+    e.addEventListener('click', function(evt) {
+        if (!opts.js_modal_lightbox || evt.button != 0) return;
+
+        modalZoomSet(gradioApp().getElementById('modalImage'), opts.js_modal_lightbox_initially_zoomed);
+        evt.preventDefault();
+        showModal(evt);
+    }, true);
+
+}
+
+function modalZoomSet(modalImage, enable) {
+    if (modalImage) modalImage.classList.toggle('modalImageFullscreen', !!enable);
+}
+
+function modalZoomToggle(event) {
+    var modalImage = gradioApp().getElementById("modalImage");
+    modalZoomSet(modalImage, !modalImage.classList.contains('modalImageFullscreen'));
+    event.stopPropagation();
+}
+
+function modalLivePreviewToggle(event) {
+    const modalToggleLivePreview = gradioApp().getElementById("modal_toggle_live_preview");
+    opts.js_live_preview_in_modal_lightbox = !opts.js_live_preview_in_modal_lightbox;
+    modalToggleLivePreview.innerHTML = opts.js_live_preview_in_modal_lightbox ? "&#x1F5C7;" : "&#x1F5C6;";
+    event.stopPropagation();
+}
+
+function modalTileImageToggle(event) {
+    const modalImage = gradioApp().getElementById("modalImage");
+    const modal = gradioApp().getElementById("lightboxModal");
+    const isTiling = modalImage.style.display === 'none';
+    if (isTiling) {
+        modalImage.style.display = 'block';
+        modal.style.setProperty('background-image', 'none');
+    } else {
+        modalImage.style.display = 'none';
+        modal.style.setProperty('background-image', `url(${modalImage.src})`);
+    }
+
+    event.stopPropagation();
+}
+
+onAfterUiUpdate(function() {
+    var fullImg_preview = gradioApp().querySelectorAll('.gradio-gallery > div > img');
+    if (fullImg_preview != null) {
+        fullImg_preview.forEach(setupImageForLightbox);
+    }
+    updateOnBackgroundChange();
+});
+
+document.addEventListener("DOMContentLoaded", function() {
+    //const modalFragment = document.createDocumentFragment();
+    const modal = document.createElement('div');
+    modal.onclick = closeModal;
+    modal.id = "lightboxModal";
+    modal.tabIndex = 0;
+    modal.addEventListener('keydown', modalKeyHandler, true);
+
+    const modalControls = document.createElement('div');
+    modalControls.className = 'modalControls gradio-container';
+    modal.append(modalControls);
+
+    const modalZoom = document.createElement('span');
+    modalZoom.className = 'modalZoom cursor';
+    modalZoom.innerHTML = '&#10529;';
+    modalZoom.addEventListener('click', modalZoomToggle, true);
+    modalZoom.title = "Toggle zoomed view";
+    modalControls.appendChild(modalZoom);
+
+    const modalTileImage = document.createElement('span');
+    modalTileImage.className = 'modalTileImage cursor';
+    modalTileImage.innerHTML = '&#8862;';
+    modalTileImage.addEventListener('click', modalTileImageToggle, true);
+    modalTileImage.title = "Preview tiling";
+    modalControls.appendChild(modalTileImage);
+
+    const modalSave = document.createElement("span");
+    modalSave.className = "modalSave cursor";
+    modalSave.id = "modal_save";
+    modalSave.innerHTML = "&#x1F5AB;";
+    modalSave.addEventListener("click", modalSaveImage, true);
+    modalSave.title = "Save Image(s)";
+    modalControls.appendChild(modalSave);
+
+    const modalToggleLivePreview = document.createElement('span');
+    modalToggleLivePreview.className = 'modalToggleLivePreview cursor';
+    modalToggleLivePreview.id = "modal_toggle_live_preview";
+    modalToggleLivePreview.innerHTML = "&#x1F5C6;";
+    modalToggleLivePreview.onclick = modalLivePreviewToggle;
+    modalToggleLivePreview.title = "Toggle live preview";
+    modalControls.appendChild(modalToggleLivePreview);
+
+    const modalClose = document.createElement('span');
+    modalClose.className = 'modalClose cursor';
+    modalClose.innerHTML = '&times;';
+    modalClose.onclick = closeModal;
+    modalClose.title = "Close image viewer";
+    modalControls.appendChild(modalClose);
+
+    const modalImage = document.createElement('img');
+    modalImage.id = 'modalImage';
+    modalImage.onclick = closeModal;
+    modalImage.tabIndex = 0;
+    modalImage.addEventListener('keydown', modalKeyHandler, true);
+    modal.appendChild(modalImage);
+
+    const modalPrev = document.createElement('a');
+    modalPrev.className = 'modalPrev';
+    modalPrev.innerHTML = '&#10094;';
+    modalPrev.tabIndex = 0;
+    modalPrev.addEventListener('click', modalPrevImage, true);
+    modalPrev.addEventListener('keydown', modalKeyHandler, true);
+    modal.appendChild(modalPrev);
+
+    const modalNext = document.createElement('a');
+    modalNext.className = 'modalNext';
+    modalNext.innerHTML = '&#10095;';
+    modalNext.tabIndex = 0;
+    modalNext.addEventListener('click', modalNextImage, true);
+    modalNext.addEventListener('keydown', modalKeyHandler, true);
+
+    modal.appendChild(modalNext);
+
+    try {
+        gradioApp().appendChild(modal);
+    } catch (e) {
+        gradioApp().body.appendChild(modal);
+    }
+
+    document.body.appendChild(modal);
+
+});
+
+```
+
+```imageviewerGamepad.js
+let gamepads = [];
+
+window.addEventListener('gamepadconnected', (e) => {
+    const index = e.gamepad.index;
+    let isWaiting = false;
+    gamepads[index] = setInterval(async() => {
+        if (!opts.js_modal_lightbox_gamepad || isWaiting) return;
+        const gamepad = navigator.getGamepads()[index];
+        const xValue = gamepad.axes[0];
+        if (xValue <= -0.3) {
+            modalPrevImage(e);
+            isWaiting = true;
+        } else if (xValue >= 0.3) {
+            modalNextImage(e);
+            isWaiting = true;
+        }
+        if (isWaiting) {
+            await sleepUntil(() => {
+                const xValue = navigator.getGamepads()[index].axes[0];
+                if (xValue < 0.3 && xValue > -0.3) {
+                    return true;
+                }
+            }, opts.js_modal_lightbox_gamepad_repeat);
+            isWaiting = false;
+        }
+    }, 10);
+});
+
+window.addEventListener('gamepaddisconnected', (e) => {
+    clearInterval(gamepads[e.gamepad.index]);
+});
+
+/*
+Primarily for vr controller type pointer devices.
+I use the wheel event because there's currently no way to do it properly with web xr.
+ */
+let isScrolling = false;
+window.addEventListener('wheel', (e) => {
+    if (!opts.js_modal_lightbox_gamepad || isScrolling) return;
+    isScrolling = true;
+
+    if (e.deltaX <= -0.6) {
+        modalPrevImage(e);
+    } else if (e.deltaX >= 0.6) {
+        modalNextImage(e);
+    }
+
+    setTimeout(() => {
+        isScrolling = false;
+    }, opts.js_modal_lightbox_gamepad_repeat);
+});
+
+function sleepUntil(f, timeout) {
+    return new Promise((resolve) => {
+        const timeStart = new Date();
+        const wait = setInterval(function() {
+            if (f() || new Date() - timeStart > timeout) {
+                clearInterval(wait);
+                resolve();
+            }
+        }, 20);
+    });
+}
+
+```
+
+```inputAccordion.js
+function inputAccordionChecked(id, checked) {
+    var accordion = gradioApp().getElementById(id);
+    accordion.visibleCheckbox.checked = checked;
+    accordion.onVisibleCheckboxChange();
+}
+
+function setupAccordion(accordion) {
+    var labelWrap = accordion.querySelector('.label-wrap');
+    var gradioCheckbox = gradioApp().querySelector('#' + accordion.id + "-checkbox input");
+    var extra = gradioApp().querySelector('#' + accordion.id + "-extra");
+    var span = labelWrap.querySelector('span');
+    var linked = true;
+
+    var isOpen = function() {
+        return labelWrap.classList.contains('open');
+    };
+
+    var observerAccordionOpen = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutationRecord) {
+            accordion.classList.toggle('input-accordion-open', isOpen());
+
+            if (linked) {
+                accordion.visibleCheckbox.checked = isOpen();
+                accordion.onVisibleCheckboxChange();
+            }
+        });
+    });
+    observerAccordionOpen.observe(labelWrap, {attributes: true, attributeFilter: ['class']});
+
+    if (extra) {
+        labelWrap.insertBefore(extra, labelWrap.lastElementChild);
+    }
+
+    accordion.onChecked = function(checked) {
+        if (isOpen() != checked) {
+            labelWrap.click();
+        }
+    };
+
+    var visibleCheckbox = document.createElement('INPUT');
+    visibleCheckbox.type = 'checkbox';
+    visibleCheckbox.checked = isOpen();
+    visibleCheckbox.id = accordion.id + "-visible-checkbox";
+    visibleCheckbox.className = gradioCheckbox.className + " input-accordion-checkbox";
+    span.insertBefore(visibleCheckbox, span.firstChild);
+
+    accordion.visibleCheckbox = visibleCheckbox;
+    accordion.onVisibleCheckboxChange = function() {
+        if (linked && isOpen() != visibleCheckbox.checked) {
+            labelWrap.click();
+        }
+
+        gradioCheckbox.checked = visibleCheckbox.checked;
+        updateInput(gradioCheckbox);
+    };
+
+    visibleCheckbox.addEventListener('click', function(event) {
+        linked = false;
+        event.stopPropagation();
+    });
+    visibleCheckbox.addEventListener('input', accordion.onVisibleCheckboxChange);
+}
+
+onUiLoaded(function() {
+    for (var accordion of gradioApp().querySelectorAll('.input-accordion')) {
+        setupAccordion(accordion);
+    }
+});
+
+```
+
+```localization.js
+
+// localization = {} -- the dict with translations is created by the backend
+
+var ignore_ids_for_localization = {
+    setting_sd_hypernetwork: 'OPTION',
+    setting_sd_model_checkpoint: 'OPTION',
+    modelmerger_primary_model_name: 'OPTION',
+    modelmerger_secondary_model_name: 'OPTION',
+    modelmerger_tertiary_model_name: 'OPTION',
+    train_embedding: 'OPTION',
+    train_hypernetwork: 'OPTION',
+    txt2img_styles: 'OPTION',
+    img2img_styles: 'OPTION',
+    setting_random_artist_categories: 'OPTION',
+    setting_face_restoration_model: 'OPTION',
+    setting_realesrgan_enabled_models: 'OPTION',
+    extras_upscaler_1: 'OPTION',
+    extras_upscaler_2: 'OPTION',
+};
+
+var re_num = /^[.\d]+$/;
+var re_emoji = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{1F9B0}-\u{1F9B3}]/u;
+
+var original_lines = {};
+var translated_lines = {};
+
+function hasLocalization() {
+    return window.localization && Object.keys(window.localization).length > 0;
+}
+
+function textNodesUnder(el) {
+    var n, a = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    while ((n = walk.nextNode())) a.push(n);
+    return a;
+}
+
+function canBeTranslated(node, text) {
+    if (!text) return false;
+    if (!node.parentElement) return false;
+
+    var parentType = node.parentElement.nodeName;
+    if (parentType == 'SCRIPT' || parentType == 'STYLE' || parentType == 'TEXTAREA') return false;
+
+    if (parentType == 'OPTION' || parentType == 'SPAN') {
+        var pnode = node;
+        for (var level = 0; level < 4; level++) {
+            pnode = pnode.parentElement;
+            if (!pnode) break;
+
+            if (ignore_ids_for_localization[pnode.id] == parentType) return false;
+        }
+    }
+
+    if (re_num.test(text)) return false;
+    if (re_emoji.test(text)) return false;
+    return true;
+}
+
+function getTranslation(text) {
+    if (!text) return undefined;
+
+    if (translated_lines[text] === undefined) {
+        original_lines[text] = 1;
+    }
+
+    var tl = localization[text];
+    if (tl !== undefined) {
+        translated_lines[tl] = 1;
+    }
+
+    return tl;
+}
+
+function processTextNode(node) {
+    var text = node.textContent.trim();
+
+    if (!canBeTranslated(node, text)) return;
+
+    var tl = getTranslation(text);
+    if (tl !== undefined) {
+        node.textContent = tl;
+    }
+}
+
+function processNode(node) {
+    if (node.nodeType == 3) {
+        processTextNode(node);
+        return;
+    }
+
+    if (node.title) {
+        let tl = getTranslation(node.title);
+        if (tl !== undefined) {
+            node.title = tl;
+        }
+    }
+
+    if (node.placeholder) {
+        let tl = getTranslation(node.placeholder);
+        if (tl !== undefined) {
+            node.placeholder = tl;
+        }
+    }
+
+    textNodesUnder(node).forEach(function(node) {
+        processTextNode(node);
+    });
+}
+
+function localizeWholePage() {
+    processNode(gradioApp());
+
+    function elem(comp) {
+        var elem_id = comp.props.elem_id ? comp.props.elem_id : "component-" + comp.id;
+        return gradioApp().getElementById(elem_id);
+    }
+
+    for (var comp of window.gradio_config.components) {
+        if (comp.props.webui_tooltip) {
+            let e = elem(comp);
+
+            let tl = e ? getTranslation(e.title) : undefined;
+            if (tl !== undefined) {
+                e.title = tl;
+            }
+        }
+        if (comp.props.placeholder) {
+            let e = elem(comp);
+            let textbox = e ? e.querySelector('[placeholder]') : null;
+
+            let tl = textbox ? getTranslation(textbox.placeholder) : undefined;
+            if (tl !== undefined) {
+                textbox.placeholder = tl;
+            }
+        }
+    }
+}
+
+function dumpTranslations() {
+    if (!hasLocalization()) {
+        // If we don't have any localization,
+        // we will not have traversed the app to find
+        // original_lines, so do that now.
+        localizeWholePage();
+    }
+    var dumped = {};
+    if (localization.rtl) {
+        dumped.rtl = true;
+    }
+
+    for (const text in original_lines) {
+        if (dumped[text] !== undefined) continue;
+        dumped[text] = localization[text] || text;
+    }
+
+    return dumped;
+}
+
+function download_localization() {
+    var text = JSON.stringify(dumpTranslations(), null, 4);
+
+    var element = document.createElement('a');
+    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+    element.setAttribute('download', "localization.json");
+    element.style.display = 'none';
+    document.body.appendChild(element);
+
+    element.click();
+
+    document.body.removeChild(element);
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+    if (!hasLocalization()) {
+        return;
+    }
+
+    onUiUpdate(function(m) {
+        m.forEach(function(mutation) {
+            mutation.addedNodes.forEach(function(node) {
+                processNode(node);
+            });
+        });
+    });
+
+    localizeWholePage();
+
+    if (localization.rtl) { // if the language is from right to left,
+        (new MutationObserver((mutations, observer) => { // wait for the style to load
+            mutations.forEach(mutation => {
+                mutation.addedNodes.forEach(node => {
+                    if (node.tagName === 'STYLE') {
+                        observer.disconnect();
+
+                        for (const x of node.sheet.rules) { // find all rtl media rules
+                            if (Array.from(x.media || []).includes('rtl')) {
+                                x.media.appendMedium('all'); // enable them
+                            }
+                        }
+                    }
+                });
+            });
+        })).observe(gradioApp(), {childList: true});
+    }
+});
+
+```
+
+```localStorage.js
+
+function localSet(k, v) {
+    try {
+        localStorage.setItem(k, v);
+    } catch (e) {
+        console.warn(`Failed to save ${k} to localStorage: ${e}`);
+    }
+}
+
+function localGet(k, def) {
+    try {
+        return localStorage.getItem(k);
+    } catch (e) {
+        console.warn(`Failed to load ${k} from localStorage: ${e}`);
+    }
+
+    return def;
+}
+
+function localRemove(k) {
+    try {
+        return localStorage.removeItem(k);
+    } catch (e) {
+        console.warn(`Failed to remove ${k} from localStorage: ${e}`);
+    }
+}
+
+```
+
+```notification.js
+// Monitors the gallery and sends a browser notification when the leading image is new.
+
+let lastHeadImg = null;
+
+let notificationButton = null;
+
+onAfterUiUpdate(function() {
+    if (notificationButton == null) {
+        notificationButton = gradioApp().getElementById('request_notifications');
+
+        if (notificationButton != null) {
+            notificationButton.addEventListener('click', () => {
+                void Notification.requestPermission();
+            }, true);
+        }
+    }
+
+    const galleryPreviews = gradioApp().querySelectorAll('div[id^="tab_"] div[id$="_results"] .thumbnail-item > img');
+
+    if (galleryPreviews == null) return;
+
+    const headImg = galleryPreviews[0]?.src;
+
+    if (headImg == null || headImg == lastHeadImg) return;
+
+    lastHeadImg = headImg;
+
+    // play notification sound if available
+    const notificationAudio = gradioApp().querySelector('#audio_notification audio');
+    if (notificationAudio) {
+        notificationAudio.volume = opts.notification_volume / 100.0 || 1.0;
+        notificationAudio.play();
+    }
+
+    if (document.hasFocus()) return;
+
+    // Multiple copies of the images are in the DOM when one is selected. Dedup with a Set to get the real number generated.
+    const imgs = new Set(Array.from(galleryPreviews).map(img => img.src));
+
+    const notification = new Notification(
+        'Stable Diffusion',
+        {
+            body: `Generated ${imgs.size > 1 ? imgs.size - opts.return_grid : 1} image${imgs.size > 1 ? 's' : ''}`,
+            icon: headImg,
+            image: headImg,
+        }
+    );
+
+    notification.onclick = function(_) {
+        parent.focus();
+        this.close();
+    };
+});
+
+```
+
+```profilerVisualization.js
+
+function createRow(table, cellName, items) {
+    var tr = document.createElement('tr');
+    var res = [];
+
+    items.forEach(function(x, i) {
+        if (x === undefined) {
+            res.push(null);
+            return;
+        }
+
+        var td = document.createElement(cellName);
+        td.textContent = x;
+        tr.appendChild(td);
+        res.push(td);
+
+        var colspan = 1;
+        for (var n = i + 1; n < items.length; n++) {
+            if (items[n] !== undefined) {
+                break;
+            }
+
+            colspan += 1;
+        }
+
+        if (colspan > 1) {
+            td.colSpan = colspan;
+        }
+    });
+
+    table.appendChild(tr);
+
+    return res;
+}
+
+function createVisualizationTable(data, cutoff = 0, sort = "") {
+    var table = document.createElement('table');
+    table.className = 'popup-table';
+
+    var keys = Object.keys(data);
+    if (sort === "number") {
+        keys = keys.sort(function(a, b) {
+            return data[b] - data[a];
+        });
+    } else {
+        keys = keys.sort();
+    }
+    var items = keys.map(function(x) {
+        return {key: x, parts: x.split('/'), value: data[x]};
+    });
+    var maxLength = items.reduce(function(a, b) {
+        return Math.max(a, b.parts.length);
+    }, 0);
+
+    var cols = createRow(
+        table,
+        'th',
+        [
+            cutoff === 0 ? 'key' : 'record',
+            cutoff === 0 ? 'value' : 'seconds'
+        ]
+    );
+    cols[0].colSpan = maxLength;
+
+    function arraysEqual(a, b) {
+        return !(a < b || b < a);
+    }
+
+    var addLevel = function(level, parent, hide) {
+        var matching = items.filter(function(x) {
+            return x.parts[level] && !x.parts[level + 1] && arraysEqual(x.parts.slice(0, level), parent);
+        });
+        if (sort === "number") {
+            matching = matching.sort(function(a, b) {
+                return b.value - a.value;
+            });
+        } else {
+            matching = matching.sort();
+        }
+        var othersTime = 0;
+        var othersList = [];
+        var othersRows = [];
+        var childrenRows = [];
+        matching.forEach(function(x) {
+            var visible = (cutoff === 0 && !hide) || (x.value >= cutoff && !hide);
+
+            var cells = [];
+            for (var i = 0; i < maxLength; i++) {
+                cells.push(x.parts[i]);
+            }
+            cells.push(cutoff === 0 ? x.value : x.value.toFixed(3));
+            var cols = createRow(table, 'td', cells);
+            for (i = 0; i < level; i++) {
+                cols[i].className = 'muted';
+            }
+
+            var tr = cols[0].parentNode;
+            if (!visible) {
+                tr.classList.add("hidden");
+            }
+
+            if (cutoff === 0 || x.value >= cutoff) {
+                childrenRows.push(tr);
+            } else {
+                othersTime += x.value;
+                othersList.push(x.parts[level]);
+                othersRows.push(tr);
+            }
+
+            var children = addLevel(level + 1, parent.concat([x.parts[level]]), true);
+            if (children.length > 0) {
+                var cell = cols[level];
+                var onclick = function() {
+                    cell.classList.remove("link");
+                    cell.removeEventListener("click", onclick);
+                    children.forEach(function(x) {
+                        x.classList.remove("hidden");
+                    });
+                };
+                cell.classList.add("link");
+                cell.addEventListener("click", onclick);
+            }
+        });
+
+        if (othersTime > 0) {
+            var cells = [];
+            for (var i = 0; i < maxLength; i++) {
+                cells.push(parent[i]);
+            }
+            cells.push(othersTime.toFixed(3));
+            cells[level] = 'others';
+            var cols = createRow(table, 'td', cells);
+            for (i = 0; i < level; i++) {
+                cols[i].className = 'muted';
+            }
+
+            var cell = cols[level];
+            var tr = cell.parentNode;
+            var onclick = function() {
+                tr.classList.add("hidden");
+                cell.classList.remove("link");
+                cell.removeEventListener("click", onclick);
+                othersRows.forEach(function(x) {
+                    x.classList.remove("hidden");
+                });
+            };
+
+            cell.title = othersList.join(", ");
+            cell.classList.add("link");
+            cell.addEventListener("click", onclick);
+
+            if (hide) {
+                tr.classList.add("hidden");
+            }
+
+            childrenRows.push(tr);
+        }
+
+        return childrenRows;
+    };
+
+    addLevel(0, []);
+
+    return table;
+}
+
+function showProfile(path, cutoff = 0.05) {
+    requestGet(path, {}, function(data) {
+        data.records['total'] = data.total;
+        const table = createVisualizationTable(data.records, cutoff, "number");
+        popup(table);
+    });
+}
+
+
+```
+
+```progressbar.js
+// code related to showing and updating progressbar shown as the image is being made
+
+function rememberGallerySelection() {
+
+}
+
+function getGallerySelectedIndex() {
+
+}
+
+function request(url, data, handler, errorHandler) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    var js = JSON.parse(xhr.responseText);
+                    handler(js);
+                } catch (error) {
+                    console.error(error);
+                    errorHandler();
+                }
+            } else {
+                errorHandler();
+            }
+        }
+    };
+    var js = JSON.stringify(data);
+    xhr.send(js);
+}
+
+function pad2(x) {
+    return x < 10 ? '0' + x : x;
+}
+
+function formatTime(secs) {
+    if (secs > 3600) {
+        return pad2(Math.floor(secs / 60 / 60)) + ":" + pad2(Math.floor(secs / 60) % 60) + ":" + pad2(Math.floor(secs) % 60);
+    } else if (secs > 60) {
+        return pad2(Math.floor(secs / 60)) + ":" + pad2(Math.floor(secs) % 60);
+    } else {
+        return Math.floor(secs) + "s";
+    }
+}
+
+
+var originalAppTitle = undefined;
+
+onUiLoaded(function() {
+    originalAppTitle = document.title;
+});
+
+function setTitle(progress) {
+    var title = originalAppTitle;
+
+    if (opts.show_progress_in_title && progress) {
+        title = '[' + progress.trim() + '] ' + title;
+    }
+
+    if (document.title != title) {
+        document.title = title;
+    }
+}
+
+
+function randomId() {
+    return "task(" + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + ")";
+}
+
+// starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
+// preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
+// calls onProgress every time there is a progress update
+function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
+    var dateStart = new Date();
+    var wasEverActive = false;
+    var parentProgressbar = progressbarContainer.parentNode;
+    var wakeLock = null;
+
+    var requestWakeLock = async function() {
+        if (!opts.prevent_screen_sleep_during_generation || wakeLock !== null) return;
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+        } catch (err) {
+            console.error('Wake Lock is not supported.');
+            wakeLock = false;
+        }
+    };
+
+    var releaseWakeLock = async function() {
+        if (!opts.prevent_screen_sleep_during_generation || !wakeLock) return;
+        try {
+            await wakeLock.release();
+            wakeLock = null;
+        } catch (err) {
+            console.error('Wake Lock release failed', err);
+        }
+    };
+
+    var divProgress = document.createElement('div');
+    divProgress.className = 'progressDiv';
+    divProgress.style.display = opts.show_progressbar ? "block" : "none";
+    var divInner = document.createElement('div');
+    divInner.className = 'progress';
+
+    divProgress.appendChild(divInner);
+    parentProgressbar.insertBefore(divProgress, progressbarContainer);
+
+    var livePreview = null;
+
+    var removeProgressBar = function() {
+        releaseWakeLock();
+        if (!divProgress) return;
+
+        setTitle("");
+        parentProgressbar.removeChild(divProgress);
+        if (gallery && livePreview) gallery.removeChild(livePreview);
+        atEnd();
+
+        divProgress = null;
+    };
+
+    var funProgress = function(id_task) {
+        requestWakeLock();
+        request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
+            if (res.completed) {
+                removeProgressBar();
+                return;
+            }
+
+            let progressText = "";
+
+            divInner.style.width = ((res.progress || 0) * 100.0) + '%';
+            divInner.style.background = res.progress ? "" : "transparent";
+
+            if (res.progress > 0) {
+                progressText = ((res.progress || 0) * 100.0).toFixed(0) + '%';
+            }
+
+            if (res.eta) {
+                progressText += " ETA: " + formatTime(res.eta);
+            }
+
+            setTitle(progressText);
+
+            if (res.textinfo && res.textinfo.indexOf("\n") == -1) {
+                progressText = res.textinfo + " " + progressText;
+            }
+
+            divInner.textContent = progressText;
+
+            var elapsedFromStart = (new Date() - dateStart) / 1000;
+
+            if (res.active) wasEverActive = true;
+
+            if (!res.active && wasEverActive) {
+                removeProgressBar();
+                return;
+            }
+
+            if (elapsedFromStart > inactivityTimeout && !res.queued && !res.active) {
+                removeProgressBar();
+                return;
+            }
+
+            if (onProgress) {
+                onProgress(res);
+            }
+
+            setTimeout(() => {
+                funProgress(id_task, res.id_live_preview);
+            }, opts.live_preview_refresh_period || 500);
+        }, function() {
+            removeProgressBar();
+        });
+    };
+
+    var funLivePreview = function(id_task, id_live_preview) {
+        request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview}, function(res) {
+            if (!divProgress) {
+                return;
+            }
+
+            if (res.live_preview && gallery) {
+                var img = new Image();
+                img.onload = function() {
+                    if (!livePreview) {
+                        livePreview = document.createElement('div');
+                        livePreview.className = 'livePreview';
+                        gallery.insertBefore(livePreview, gallery.firstElementChild);
+                    }
+
+                    livePreview.appendChild(img);
+                    if (livePreview.childElementCount > 2) {
+                        livePreview.removeChild(livePreview.firstElementChild);
+                    }
+                };
+                img.src = res.live_preview;
+            }
+
+            setTimeout(() => {
+                funLivePreview(id_task, res.id_live_preview);
+            }, opts.live_preview_refresh_period || 500);
+        }, function() {
+            removeProgressBar();
+        });
+    };
+
+    funProgress(id_task, 0);
+
+    if (gallery) {
+        funLivePreview(id_task, 0);
+    }
+
+}
+
+```
+
+```resizeHandle.js
+(function() {
+    const GRADIO_MIN_WIDTH = 320;
+    const PAD = 16;
+    const DEBOUNCE_TIME = 100;
+    const DOUBLE_TAP_DELAY = 200; //ms
+
+    const R = {
+        tracking: false,
+        parent: null,
+        parentWidth: null,
+        leftCol: null,
+        leftColStartWidth: null,
+        screenX: null,
+        lastTapTime: null,
+    };
+
+    let resizeTimer;
+    let parents = [];
+
+    function setLeftColGridTemplate(el, width) {
+        el.style.gridTemplateColumns = `${width}px 16px 1fr`;
+    }
+
+    function displayResizeHandle(parent) {
+        if (!parent.needHideOnMoblie) {
+            return true;
+        }
+        if (window.innerWidth < GRADIO_MIN_WIDTH * 2 + PAD * 4) {
+            parent.style.display = 'flex';
+            parent.resizeHandle.style.display = "none";
+            return false;
+        } else {
+            parent.style.display = 'grid';
+            parent.resizeHandle.style.display = "block";
+            return true;
+        }
+    }
+
+    function afterResize(parent) {
+        if (displayResizeHandle(parent) && parent.style.gridTemplateColumns != parent.style.originalGridTemplateColumns) {
+            const oldParentWidth = R.parentWidth;
+            const newParentWidth = parent.offsetWidth;
+            const widthL = parseInt(parent.style.gridTemplateColumns.split(' ')[0]);
+
+            const ratio = newParentWidth / oldParentWidth;
+
+            const newWidthL = Math.max(Math.floor(ratio * widthL), parent.minLeftColWidth);
+            setLeftColGridTemplate(parent, newWidthL);
+
+            R.parentWidth = newParentWidth;
+        }
+    }
+
+    function setup(parent) {
+
+        function onDoubleClick(evt) {
+            evt.preventDefault();
+            evt.stopPropagation();
+
+            parent.style.gridTemplateColumns = parent.style.originalGridTemplateColumns;
+        }
+
+        const leftCol = parent.firstElementChild;
+        const rightCol = parent.lastElementChild;
+
+        parents.push(parent);
+
+        parent.style.display = 'grid';
+        parent.style.gap = '0';
+        let leftColTemplate = "";
+        if (parent.children[0].style.flexGrow) {
+            leftColTemplate = `${parent.children[0].style.flexGrow}fr`;
+            parent.minLeftColWidth = GRADIO_MIN_WIDTH;
+            parent.minRightColWidth = GRADIO_MIN_WIDTH;
+            parent.needHideOnMoblie = true;
+        } else {
+            leftColTemplate = parent.children[0].style.flexBasis;
+            parent.minLeftColWidth = parent.children[0].style.flexBasis.slice(0, -2) / 2;
+            parent.minRightColWidth = 0;
+            parent.needHideOnMoblie = false;
+        }
+
+        if (!leftColTemplate) {
+            leftColTemplate = '1fr';
+        }
+
+        const gridTemplateColumns = `${leftColTemplate} ${PAD}px ${parent.children[1].style.flexGrow}fr`;
+        parent.style.gridTemplateColumns = gridTemplateColumns;
+        parent.style.originalGridTemplateColumns = gridTemplateColumns;
+
+        const resizeHandle = document.createElement('div');
+        resizeHandle.classList.add('resize-handle');
+        parent.insertBefore(resizeHandle, rightCol);
+        parent.resizeHandle = resizeHandle;
+
+        ['mousedown', 'touchstart'].forEach((eventType) => {
+            resizeHandle.addEventListener(eventType, (evt) => {
+                if (eventType.startsWith('mouse')) {
+                    if (evt.button !== 0) return;
+                } else {
+                    if (evt.changedTouches.length !== 1) return;
+
+                    const currentTime = new Date().getTime();
+                    if (R.lastTapTime && currentTime - R.lastTapTime <= DOUBLE_TAP_DELAY) {
+                        onDoubleClick(evt);
+                        return;
+                    }
+
+                    R.lastTapTime = currentTime;
+                }
+
+                evt.preventDefault();
+                evt.stopPropagation();
+
+                document.body.classList.add('resizing');
+
+                R.tracking = true;
+                R.parent = parent;
+                R.parentWidth = parent.offsetWidth;
+                R.leftCol = leftCol;
+                R.leftColStartWidth = leftCol.offsetWidth;
+                if (eventType.startsWith('mouse')) {
+                    R.screenX = evt.screenX;
+                } else {
+                    R.screenX = evt.changedTouches[0].screenX;
+                }
+            }, {passive: false});
+        });
+
+        resizeHandle.addEventListener('dblclick', onDoubleClick);
+
+        afterResize(parent);
+    }
+
+    ['mousemove', 'touchmove'].forEach((eventType) => {
+        window.addEventListener(eventType, (evt) => {
+            if (eventType.startsWith('mouse')) {
+                if (evt.button !== 0) return;
+            } else {
+                if (evt.changedTouches.length !== 1) return;
+            }
+
+            if (R.tracking) {
+                if (eventType.startsWith('mouse')) {
+                    evt.preventDefault();
+                }
+                evt.stopPropagation();
+
+                let delta = 0;
+                if (eventType.startsWith('mouse')) {
+                    delta = R.screenX - evt.screenX;
+                } else {
+                    delta = R.screenX - evt.changedTouches[0].screenX;
+                }
+                const leftColWidth = Math.max(Math.min(R.leftColStartWidth - delta, R.parent.offsetWidth - R.parent.minRightColWidth - PAD), R.parent.minLeftColWidth);
+                setLeftColGridTemplate(R.parent, leftColWidth);
+            }
+        });
+    });
+
+    ['mouseup', 'touchend'].forEach((eventType) => {
+        window.addEventListener(eventType, (evt) => {
+            if (eventType.startsWith('mouse')) {
+                if (evt.button !== 0) return;
+            } else {
+                if (evt.changedTouches.length !== 1) return;
+            }
+
+            if (R.tracking) {
+                evt.preventDefault();
+                evt.stopPropagation();
+
+                R.tracking = false;
+
+                document.body.classList.remove('resizing');
+            }
+        });
+    });
+
+
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+
+        resizeTimer = setTimeout(function() {
+            for (const parent of parents) {
+                afterResize(parent);
+            }
+        }, DEBOUNCE_TIME);
+    });
+
+    setupResizeHandle = setup;
+})();
+
+
+function setupAllResizeHandles() {
+    for (var elem of gradioApp().querySelectorAll('.resize-handle-row')) {
+        if (!elem.querySelector('.resize-handle') && !elem.children[0].classList.contains("hidden")) {
+            setupResizeHandle(elem);
+        }
+    }
+}
+
+
+onUiLoaded(setupAllResizeHandles);
+
+
+```
+
+```settings.js
+let settingsExcludeTabsFromShowAll = {
+    settings_tab_defaults: 1,
+    settings_tab_sysinfo: 1,
+    settings_tab_actions: 1,
+    settings_tab_licenses: 1,
+};
+
+function settingsShowAllTabs() {
+    gradioApp().querySelectorAll('#settings > div').forEach(function(elem) {
+        if (settingsExcludeTabsFromShowAll[elem.id]) return;
+
+        elem.style.display = "block";
+    });
+}
+
+function settingsShowOneTab() {
+    gradioApp().querySelector('#settings_show_one_page').click();
+}
+
+onUiLoaded(function() {
+    var edit = gradioApp().querySelector('#settings_search');
+    var editTextarea = gradioApp().querySelector('#settings_search > label > input');
+    var buttonShowAllPages = gradioApp().getElementById('settings_show_all_pages');
+    var settings_tabs = gradioApp().querySelector('#settings div');
+
+    onEdit('settingsSearch', editTextarea, 250, function() {
+        var searchText = (editTextarea.value || "").trim().toLowerCase();
+
+        gradioApp().querySelectorAll('#settings > div[id^=settings_] div[id^=column_settings_] > *').forEach(function(elem) {
+            var visible = elem.textContent.trim().toLowerCase().indexOf(searchText) != -1;
+            elem.style.display = visible ? "" : "none";
+        });
+
+        if (searchText != "") {
+            settingsShowAllTabs();
+        } else {
+            settingsShowOneTab();
+        }
+    });
+
+    settings_tabs.insertBefore(edit, settings_tabs.firstChild);
+    settings_tabs.appendChild(buttonShowAllPages);
+
+
+    buttonShowAllPages.addEventListener("click", settingsShowAllTabs);
+});
+
+
+onOptionsChanged(function() {
+    if (gradioApp().querySelector('#settings .settings-category')) return;
+
+    var sectionMap = {};
+    gradioApp().querySelectorAll('#settings > div > button').forEach(function(x) {
+        sectionMap[x.textContent.trim()] = x;
+    });
+
+    opts._categories.forEach(function(x) {
+        var section = localization[x[0]] ?? x[0];
+        var category = localization[x[1]] ?? x[1];
+
+        var span = document.createElement('SPAN');
+        span.textContent = category;
+        span.className = 'settings-category';
+
+        var sectionElem = sectionMap[section];
+        if (!sectionElem) return;
+
+        sectionElem.parentElement.insertBefore(span, sectionElem);
+    });
+});
+
+
+```
+
+```textualInversion.js
+
+
+
+function start_training_textual_inversion() {
+    gradioApp().querySelector('#ti_error').innerHTML = '';
+
+    var id = randomId();
+    requestProgress(id, gradioApp().getElementById('ti_output'), gradioApp().getElementById('ti_gallery'), function() {}, function(progress) {
+        gradioApp().getElementById('ti_progress').innerHTML = progress.textinfo;
+    });
+
+    var res = Array.from(arguments);
+
+    res[0] = id;
+
+    return res;
+}
+
+```
+
+```token-counters.js
+let promptTokenCountUpdateFunctions = {};
+
+function update_txt2img_tokens(...args) {
+    // Called from Gradio
+    update_token_counter("txt2img_token_button");
+    update_token_counter("txt2img_negative_token_button");
+    if (args.length == 2) {
+        return args[0];
+    }
+    return args;
+}
+
+function update_img2img_tokens(...args) {
+    // Called from Gradio
+    update_token_counter("img2img_token_button");
+    update_token_counter("img2img_negative_token_button");
+    if (args.length == 2) {
+        return args[0];
+    }
+    return args;
+}
+
+function update_token_counter(button_id) {
+    promptTokenCountUpdateFunctions[button_id]?.();
+}
+
+
+function recalculatePromptTokens(name) {
+    promptTokenCountUpdateFunctions[name]?.();
+}
+
+function recalculate_prompts_txt2img() {
+    // Called from Gradio
+    recalculatePromptTokens('txt2img_prompt');
+    recalculatePromptTokens('txt2img_neg_prompt');
+    return Array.from(arguments);
+}
+
+function recalculate_prompts_img2img() {
+    // Called from Gradio
+    recalculatePromptTokens('img2img_prompt');
+    recalculatePromptTokens('img2img_neg_prompt');
+    return Array.from(arguments);
+}
+
+function setupTokenCounting(id, id_counter, id_button) {
+    var prompt = gradioApp().getElementById(id);
+    var counter = gradioApp().getElementById(id_counter);
+    var textarea = gradioApp().querySelector(`#${id} > label > textarea`);
+
+    if (counter.parentElement == prompt.parentElement) {
+        return;
+    }
+
+    prompt.parentElement.insertBefore(counter, prompt);
+    prompt.parentElement.style.position = "relative";
+
+    var func = onEdit(id, textarea, 800, function() {
+        if (counter.classList.contains("token-counter-visible")) {
+            gradioApp().getElementById(id_button)?.click();
+        }
+    });
+    promptTokenCountUpdateFunctions[id] = func;
+    promptTokenCountUpdateFunctions[id_button] = func;
+}
+
+function toggleTokenCountingVisibility(id, id_counter, id_button) {
+    var counter = gradioApp().getElementById(id_counter);
+
+    counter.style.display = opts.disable_token_counters ? "none" : "block";
+    counter.classList.toggle("token-counter-visible", !opts.disable_token_counters);
+}
+
+function runCodeForTokenCounters(fun) {
+    fun('txt2img_prompt', 'txt2img_token_counter', 'txt2img_token_button');
+    fun('txt2img_neg_prompt', 'txt2img_negative_token_counter', 'txt2img_negative_token_button');
+    fun('img2img_prompt', 'img2img_token_counter', 'img2img_token_button');
+    fun('img2img_neg_prompt', 'img2img_negative_token_counter', 'img2img_negative_token_button');
+}
+
+onUiLoaded(function() {
+    runCodeForTokenCounters(setupTokenCounting);
+});
+
+onOptionsChanged(function() {
+    runCodeForTokenCounters(toggleTokenCountingVisibility);
+});
+
+```
+
+```ui_settings_hints.js
+// various hints and extra info for the settings tab
+
+var settingsHintsSetup = false;
+
+onOptionsChanged(function() {
+    if (settingsHintsSetup) return;
+    settingsHintsSetup = true;
+
+    gradioApp().querySelectorAll('#settings [id^=setting_]').forEach(function(div) {
+        var name = div.id.substr(8);
+        var commentBefore = opts._comments_before[name];
+        var commentAfter = opts._comments_after[name];
+
+        if (!commentBefore && !commentAfter) return;
+
+        var span = null;
+        if (div.classList.contains('gradio-checkbox')) span = div.querySelector('label span');
+        else if (div.classList.contains('gradio-checkboxgroup')) span = div.querySelector('span').firstChild;
+        else if (div.classList.contains('gradio-radio')) span = div.querySelector('span').firstChild;
+        else span = div.querySelector('label span').firstChild;
+
+        if (!span) return;
+
+        if (commentBefore) {
+            var comment = document.createElement('DIV');
+            comment.className = 'settings-comment';
+            comment.innerHTML = commentBefore;
+            span.parentElement.insertBefore(document.createTextNode('\xa0'), span);
+            span.parentElement.insertBefore(comment, span);
+            span.parentElement.insertBefore(document.createTextNode('\xa0'), span);
+        }
+        if (commentAfter) {
+            comment = document.createElement('DIV');
+            comment.className = 'settings-comment';
+            comment.innerHTML = commentAfter;
+            span.parentElement.insertBefore(comment, span.nextSibling);
+            span.parentElement.insertBefore(document.createTextNode('\xa0'), span.nextSibling);
+        }
+    });
+});
+
+function settingsHintsShowQuicksettings() {
+    requestGet("./internal/quicksettings-hint", {}, function(data) {
+        var table = document.createElement('table');
+        table.className = 'popup-table';
+
+        data.forEach(function(obj) {
+            var tr = document.createElement('tr');
+            var td = document.createElement('td');
+            td.textContent = obj.name;
+            tr.appendChild(td);
+
+            td = document.createElement('td');
+            td.textContent = obj.label;
+            tr.appendChild(td);
+
+            table.appendChild(tr);
+        });
+
+        popup(table);
+    });
+}
+
+```
+
+```ui.js
+// various functions for interaction with ui.py not large enough to warrant putting them in separate files
+
+function set_theme(theme) {
+    var gradioURL = window.location.href;
+    if (!gradioURL.includes('?__theme=')) {
+        window.location.replace(gradioURL + '?__theme=' + theme);
+    }
+}
+
+function all_gallery_buttons() {
+    var allGalleryButtons = gradioApp().querySelectorAll('[style="display: block;"].tabitem div[id$=_gallery].gradio-gallery .thumbnails > .thumbnail-item.thumbnail-small');
+    var visibleGalleryButtons = [];
+    allGalleryButtons.forEach(function(elem) {
+        if (elem.parentElement.offsetParent) {
+            visibleGalleryButtons.push(elem);
+        }
+    });
+    return visibleGalleryButtons;
+}
+
+function selected_gallery_button() {
+    return all_gallery_buttons().find(elem => elem.classList.contains('selected')) ?? null;
+}
+
+function selected_gallery_index() {
+    return all_gallery_buttons().findIndex(elem => elem.classList.contains('selected'));
+}
+
+function gallery_container_buttons(gallery_container) {
+    return gradioApp().querySelectorAll(`#${gallery_container} .thumbnail-item.thumbnail-small`);
+}
+
+function selected_gallery_index_id(gallery_container) {
+    return Array.from(gallery_container_buttons(gallery_container)).findIndex(elem => elem.classList.contains('selected'));
+}
+
+function extract_image_from_gallery(gallery) {
+    if (gallery.length == 0) {
+        return [null];
+    }
+    if (gallery.length == 1) {
+        return [gallery[0]];
+    }
+
+    var index = selected_gallery_index();
+
+    if (index < 0 || index >= gallery.length) {
+        // Use the first image in the gallery as the default
+        index = 0;
+    }
+
+    return [gallery[index]];
+}
+
+window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
+
+function switch_to_txt2img() {
+    gradioApp().querySelector('#tabs').querySelectorAll('button')[0].click();
+
+    return Array.from(arguments);
+}
+
+function switch_to_img2img_tab(no) {
+    gradioApp().querySelector('#tabs').querySelectorAll('button')[1].click();
+    gradioApp().getElementById('mode_img2img').querySelectorAll('button')[no].click();
+}
+function switch_to_img2img() {
+    switch_to_img2img_tab(0);
+    return Array.from(arguments);
+}
+
+function switch_to_sketch() {
+    switch_to_img2img_tab(1);
+    return Array.from(arguments);
+}
+
+function switch_to_inpaint() {
+    switch_to_img2img_tab(2);
+    return Array.from(arguments);
+}
+
+function switch_to_inpaint_sketch() {
+    switch_to_img2img_tab(3);
+    return Array.from(arguments);
+}
+
+function switch_to_extras() {
+    gradioApp().querySelector('#tabs').querySelectorAll('button')[2].click();
+
+    return Array.from(arguments);
+}
+
+function switch_to_svd() {
+    gradioApp().querySelector('#tabs').querySelectorAll('button')[6].click();
+    return Array.from(arguments);
+}
+
+function get_tab_index(tabId) {
+    let buttons = gradioApp().getElementById(tabId).querySelector('div').querySelectorAll('button');
+    for (let i = 0; i < buttons.length; i++) {
+        if (buttons[i].classList.contains('selected')) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+function create_tab_index_args(tabId, args) {
+    var res = Array.from(args);
+    res[0] = get_tab_index(tabId);
+    return res;
+}
+
+function get_img2img_tab_index() {
+    let res = Array.from(arguments);
+    res.splice(-2);
+    res[0] = get_tab_index('mode_img2img');
+    return res;
+}
+
+function create_submit_args(args) {
+    var res = Array.from(args);
+
+    // As it is currently, txt2img and img2img send back the previous output args (txt2img_gallery, generation_info, html_info) whenever you generate a new image.
+    // This can lead to uploading a huge gallery of previously generated images, which leads to an unnecessary delay between submitting and beginning to generate.
+    // I don't know why gradio is sending outputs along with inputs, but we can prevent sending the image gallery here, which seems to be an issue for some.
+    // If gradio at some point stops sending outputs, this may break something
+    if (Array.isArray(res[res.length - 3])) {
+        res[res.length - 3] = null;
+    }
+
+    return res;
+}
+
+function setSubmitButtonsVisibility(tabname, showInterrupt, showSkip, showInterrupting) {
+    gradioApp().getElementById(tabname + '_interrupt').style.display = showInterrupt ? "block" : "none";
+    gradioApp().getElementById(tabname + '_skip').style.display = showSkip ? "block" : "none";
+    gradioApp().getElementById(tabname + '_interrupting').style.display = showInterrupting ? "block" : "none";
+}
+
+function showSubmitButtons(tabname, show) {
+    setSubmitButtonsVisibility(tabname, !show, !show, false);
+}
+
+function showSubmitInterruptingPlaceholder(tabname) {
+    setSubmitButtonsVisibility(tabname, false, true, true);
+}
+
+function showRestoreProgressButton(tabname, show) {
+    var button = gradioApp().getElementById(tabname + "_restore_progress");
+    if (!button) return;
+    button.style.setProperty('display', show ? 'flex' : 'none', 'important');
+}
+
+function submit() {
+    showSubmitButtons('txt2img', false);
+
+    var id = randomId();
+    localSet("txt2img_task_id", id);
+
+    requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
+        showSubmitButtons('txt2img', true);
+        localRemove("txt2img_task_id");
+        showRestoreProgressButton('txt2img', false);
+    });
+
+    var res = create_submit_args(arguments);
+
+    res[0] = id;
+
+    return res;
+}
+
+function submit_txt2img_upscale() {
+    var res = submit(...arguments);
+
+    res[2] = selected_gallery_index();
+
+    return res;
+}
+
+function submit_img2img() {
+    showSubmitButtons('img2img', false);
+
+    var id = randomId();
+    localSet("img2img_task_id", id);
+
+    requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
+        showSubmitButtons('img2img', true);
+        localRemove("img2img_task_id");
+        showRestoreProgressButton('img2img', false);
+    });
+
+    var res = create_submit_args(arguments);
+
+    res[0] = id;
+    res[1] = get_tab_index('mode_img2img');
+
+    return res;
+}
+
+function submit_extras() {
+    showSubmitButtons('extras', false);
+
+    var id = randomId();
+
+    requestProgress(id, gradioApp().getElementById('extras_gallery_container'), gradioApp().getElementById('extras_gallery'), function() {
+        showSubmitButtons('extras', true);
+    });
+
+    var res = create_submit_args(arguments);
+
+    res[0] = id;
+
+    console.log(res);
+    return res;
+}
+
+function restoreProgressTxt2img() {
+    showRestoreProgressButton("txt2img", false);
+    var id = localGet("txt2img_task_id");
+
+    if (id) {
+        showSubmitInterruptingPlaceholder('txt2img');
+        requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
+            showSubmitButtons('txt2img', true);
+        }, null, 0);
+    }
+
+    return id;
+}
+
+function restoreProgressImg2img() {
+    showRestoreProgressButton("img2img", false);
+
+    var id = localGet("img2img_task_id");
+
+    if (id) {
+        showSubmitInterruptingPlaceholder('img2img');
+        requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
+            showSubmitButtons('img2img', true);
+        }, null, 0);
+    }
+
+    return id;
+}
+
+
+/**
+ * Configure the width and height elements on `tabname` to accept
+ * pasting of resolutions in the form of "width x height".
+ */
+function setupResolutionPasting(tabname) {
+    var width = gradioApp().querySelector(`#${tabname}_width input[type=number]`);
+    var height = gradioApp().querySelector(`#${tabname}_height input[type=number]`);
+    for (const el of [width, height]) {
+        el.addEventListener('paste', function(event) {
+            var pasteData = event.clipboardData.getData('text/plain');
+            var parsed = pasteData.match(/^\s*(\d+)\D+(\d+)\s*$/);
+            if (parsed) {
+                width.value = parsed[1];
+                height.value = parsed[2];
+                updateInput(width);
+                updateInput(height);
+                event.preventDefault();
+            }
+        });
+    }
+}
+
+onUiLoaded(function() {
+    showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
+    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+    setupResolutionPasting('txt2img');
+    setupResolutionPasting('img2img');
+});
+
+
+function modelmerger() {
+    var id = randomId();
+    requestProgress(id, gradioApp().getElementById('modelmerger_results_panel'), null, function() {});
+
+    var res = create_submit_args(arguments);
+    res[0] = id;
+    return res;
+}
+
+
+function ask_for_style_name(_, prompt_text, negative_prompt_text) {
+    var name_ = prompt('Style name:');
+    return [name_, prompt_text, negative_prompt_text];
+}
+
+function confirm_clear_prompt(prompt, negative_prompt) {
+    if (confirm("Delete prompt?")) {
+        prompt = "";
+        negative_prompt = "";
+    }
+
+    return [prompt, negative_prompt];
+}
+
+
+var opts = {};
+onAfterUiUpdate(function() {
+    if (Object.keys(opts).length != 0) return;
+
+    var json_elem = gradioApp().getElementById('settings_json');
+    if (json_elem == null) return;
+
+    var textarea = json_elem.querySelector('textarea');
+    var jsdata = textarea.value;
+    opts = JSON.parse(jsdata);
+
+    executeCallbacks(optionsAvailableCallbacks); /*global optionsAvailableCallbacks*/
+    executeCallbacks(optionsChangedCallbacks); /*global optionsChangedCallbacks*/
+
+    Object.defineProperty(textarea, 'value', {
+        set: function(newValue) {
+            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            var oldValue = valueProp.get.call(textarea);
+            valueProp.set.call(textarea, newValue);
+
+            if (oldValue != newValue) {
+                opts = JSON.parse(textarea.value);
+            }
+
+            executeCallbacks(optionsChangedCallbacks);
+        },
+        get: function() {
+            var valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            return valueProp.get.call(textarea);
+        }
+    });
+
+    json_elem.parentElement.style.display = "none";
+});
+
+onOptionsChanged(function() {
+    var elem = gradioApp().getElementById('sd_checkpoint_hash');
+    var sd_checkpoint_hash = opts.sd_checkpoint_hash || "";
+    var shorthash = sd_checkpoint_hash.substring(0, 10);
+
+    if (elem && elem.textContent != shorthash) {
+        elem.textContent = shorthash;
+        elem.title = sd_checkpoint_hash;
+        elem.href = "https://google.com/search?q=" + sd_checkpoint_hash;
+    }
+});
+
+let txt2img_textarea, img2img_textarea = undefined;
+
+function restart_reload() {
+    document.body.style.backgroundColor = "var(--background-fill-primary)";
+    document.body.innerHTML = '<h1 style="font-family:monospace;margin-top:20%;color:lightgray;text-align:center;">Reloading...</h1>';
+    var requestPing = function() {
+        requestGet("./internal/ping", {}, function(data) {
+            location.reload();
+        }, function() {
+            setTimeout(requestPing, 500);
+        });
+    };
+
+    setTimeout(requestPing, 2000);
+
+    return [];
+}
+
+// Simulate an `input` DOM event for Gradio Textbox component. Needed after you edit its contents in javascript, otherwise your edits
+// will only visible on web page and not sent to python.
+function updateInput(target) {
+    let e = new Event("input", {bubbles: true});
+    Object.defineProperty(e, "target", {value: target});
+    target.dispatchEvent(e);
+}
+
+
+var desiredCheckpointName = null;
+function selectCheckpoint(name) {
+    desiredCheckpointName = name;
+    gradioApp().getElementById('change_checkpoint').click();
+}
+
+function currentImg2imgSourceResolution(w, h, scaleBy) {
+    var img = gradioApp().querySelector('#mode_img2img > div[style="display: block;"] img');
+    return img ? [img.naturalWidth, img.naturalHeight, scaleBy] : [0, 0, scaleBy];
+}
+
+function updateImg2imgResizeToTextAfterChangingImage() {
+    // At the time this is called from gradio, the image has no yet been replaced.
+    // There may be a better solution, but this is simple and straightforward so I'm going with it.
+
+    setTimeout(function() {
+        gradioApp().getElementById('img2img_update_resize_to').click();
+    }, 500);
+
+    return [];
+
+}
+
+
+
+function setRandomSeed(elem_id) {
+    var input = gradioApp().querySelector("#" + elem_id + " input");
+    if (!input) return [];
+
+    input.value = "-1";
+    updateInput(input);
+    return [];
+}
+
+function switchWidthHeight(tabname) {
+    var width = gradioApp().querySelector("#" + tabname + "_width input[type=number]");
+    var height = gradioApp().querySelector("#" + tabname + "_height input[type=number]");
+    if (!width || !height) return [];
+
+    var tmp = width.value;
+    width.value = height.value;
+    height.value = tmp;
+
+    updateInput(width);
+    updateInput(height);
+    return [];
+}
+
+
+var onEditTimers = {};
+
+// calls func after afterMs milliseconds has passed since the input elem has been edited by user
+function onEdit(editId, elem, afterMs, func) {
+    var edited = function() {
+        var existingTimer = onEditTimers[editId];
+        if (existingTimer) clearTimeout(existingTimer);
+
+        onEditTimers[editId] = setTimeout(func, afterMs);
+    };
+
+    elem.addEventListener("input", edited);
+
+    return edited;
+}
+
+```
+

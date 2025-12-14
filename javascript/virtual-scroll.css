@@ -1,0 +1,153 @@
+/**
+ * Virtual Scroll Performance CSS
+ * 
+ * This file adds CSS containment and other optimizations for the virtual
+ * scrolling implementation of Extra Networks cards.
+ * 
+ * Add this to your stylesheets or inject it via JavaScript.
+ */
+
+/* Virtual scroll container optimization */
+.virtual-scroll-content {
+    contain: layout style;
+    will-change: transform;
+}
+
+.virtual-scroll-cards {
+    contain: layout style paint;
+}
+
+/* Card rendering optimization */
+.extra-network-cards .card {
+    /* Containment for individual cards */
+    contain: layout style paint;
+    
+    /* Hint to browser for GPU acceleration */
+    will-change: auto;
+    
+    /* Prevent layout thrashing during scroll */
+    transform: translateZ(0);
+    
+    /* Smooth background image loading */
+    background-color: var(--background-fill-secondary, #2a2a2a);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Optimize image loading appearance */
+.extra-network-cards .card[data-bg-url] {
+    /* Show placeholder while loading */
+    background-image: none !important;
+}
+
+.extra-network-cards .card:not([data-bg-url]) {
+    /* Smooth transition when image loads */
+    transition: background-image 0.15s ease-in-out;
+}
+
+/* Reduce repaints during scroll */
+.extra-network-cards .card .button-row,
+.extra-network-cards .card .actions {
+    contain: layout style;
+}
+
+/* Optimize text rendering */
+.extra-network-cards .card .name,
+.extra-network-cards .card .description {
+    text-rendering: optimizeSpeed;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Hide search terms (data attribute, not visible) */
+.extra-network-cards .card .search_terms {
+    display: none;
+}
+
+/* Content visibility for off-screen optimization (modern browsers) */
+@supports (content-visibility: auto) {
+    .extra-network-pane {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 600px;
+    }
+}
+
+/* Scroll container optimization */
+#txt2img_lora_cards,
+#img2img_lora_cards,
+#txt2img_checkpoints_cards,
+#img2img_checkpoints_cards,
+#txt2img_textual_inversion_cards,
+#img2img_textual_inversion_cards,
+#txt2img_hypernetworks_cards,
+#img2img_hypernetworks_cards {
+    /* Optimize scrolling */
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    
+    /* Scrollbar styling for better UX */
+    scrollbar-width: thin;
+    scrollbar-color: var(--neutral-600, #666) transparent;
+}
+
+/* Webkit scrollbar styling */
+#txt2img_lora_cards::-webkit-scrollbar,
+#img2img_lora_cards::-webkit-scrollbar,
+#txt2img_checkpoints_cards::-webkit-scrollbar,
+#img2img_checkpoints_cards::-webkit-scrollbar {
+    width: 8px;
+}
+
+#txt2img_lora_cards::-webkit-scrollbar-thumb,
+#img2img_lora_cards::-webkit-scrollbar-thumb,
+#txt2img_checkpoints_cards::-webkit-scrollbar-thumb,
+#img2img_checkpoints_cards::-webkit-scrollbar-thumb {
+    background-color: var(--neutral-600, #666);
+    border-radius: 4px;
+}
+
+#txt2img_lora_cards::-webkit-scrollbar-track,
+#img2img_lora_cards::-webkit-scrollbar-track,
+#txt2img_checkpoints_cards::-webkit-scrollbar-track,
+#img2img_checkpoints_cards::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* Loading indicator for cards */
+.extra-network-cards .card.loading {
+    position: relative;
+}
+
+.extra-network-cards .card.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 24px;
+    height: 24px;
+    margin: -12px 0 0 -12px;
+    border: 2px solid var(--primary-400, #666);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: card-loading-spin 0.8s linear infinite;
+}
+
+@keyframes card-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Reduce animation during scroll for performance */
+.extra-network-cards.scrolling .card {
+    transition: none !important;
+    animation: none !important;
+}
+
+/* GPU hint for smooth scrolling on high-DPI displays */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+    .virtual-scroll-content {
+        backface-visibility: hidden;
+        -webkit-backface-visibility: hidden;
+    }
+}

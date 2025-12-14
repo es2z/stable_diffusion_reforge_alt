@@ -1,0 +1,199 @@
+﻿```extra-networks-card.html
+<div class="card" style="{style}" onclick="{card_clicked}" data-name="{name}" {sort_keys}>
+	{background_image}
+	<div class="button-row">{copy_path_button}{metadata_button}{edit_button}</div>
+	<div class="actions">
+		<div class="additional">{search_terms}</div>
+		<span class="name">{name}</span>
+		<span class="description">{description}</span>
+	</div>
+</div>
+
+```
+
+```extra-networks-copy-path-button.html
+<div class="copy-path-button card-button"
+    title="Copy path to clipboard"
+    onclick="extraNetworksCopyCardPath(event)"
+    data-clipboard-text="{filename}">
+</div>
+```
+
+```extra-networks-edit-item-button.html
+<div class="edit-button card-button"
+    title="Edit metadata"
+    onclick="extraNetworksEditUserMetadata(event, '{tabname}', '{extra_networks_tabname}')">
+</div>
+```
+
+```extra-networks-metadata-button.html
+<div class="metadata-button card-button"
+    title="Show internal metadata"
+    onclick="extraNetworksRequestMetadata(event, '{extra_networks_tabname}')">
+</div>
+```
+
+```extra-networks-no-cards.html
+<div class='nocards'>
+<h1>Nothing here. Add some content to the following directories:</h1>
+
+<ul>
+{dirs}
+</ul>
+</div>
+
+
+```
+
+```extra-networks-pane-dirs.html
+    <div class="extra-network-pane-content-dirs">
+        <div id='{tabname}_{extra_networks_tabname}_dirs' class='extra-network-dirs'>
+            {dirs_html}
+        </div>
+        <div id='{tabname}_{extra_networks_tabname}_cards' class='extra-network-cards'>
+            {items_html}
+        </div>
+    </div>
+
+```
+
+```extra-networks-pane-tree.html
+    <div class="extra-network-pane-content-tree resize-handle-row">
+        <div id='{tabname}_{extra_networks_tabname}_tree' class='extra-network-tree' style='flex-basis: {extra_networks_tree_view_default_width}px'>
+            {tree_html}
+        </div>
+        <div id='{tabname}_{extra_networks_tabname}_cards' class='extra-network-cards' style='flex-grow: 1;'>
+            {items_html}
+        </div>
+    </div>
+```
+
+```extra-networks-pane.html
+<div id='{tabname}_{extra_networks_tabname}_pane' class='extra-network-pane {tree_view_div_default_display_class}'>
+    <div class="extra-network-control" id="{tabname}_{extra_networks_tabname}_controls" style="display:none" >
+        <div class="extra-network-control--search">
+            <input
+                id="{tabname}_{extra_networks_tabname}_extra_search"
+                class="extra-network-control--search-text"
+                type="search"
+                placeholder="Search"
+            >
+        </div>
+
+        <small>Sort: </small>
+        <div 
+            id="{tabname}_{extra_networks_tabname}_extra_sort_path"
+            class="extra-network-control--sort{sort_path_active}"
+            data-sortkey="default"
+            title="Sort by path"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_name"
+            class="extra-network-control--sort{sort_name_active}"
+            data-sortkey="name"
+            title="Sort by name"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_date_created"
+            class="extra-network-control--sort{sort_date_created_active}"
+            data-sortkey="date_created"
+            title="Sort by date created"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_date_modified"
+            class="extra-network-control--sort{sort_date_modified_active}"
+            data-sortkey="date_modified"
+            title="Sort by date modified"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+
+        <small> </small>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_dir"
+            class="extra-network-control--sort-dir"
+            data-sortdir="{data_sortdir}"
+            title="Sort ascending"
+            onclick="extraNetworksControlSortDirOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-dir-icon"></i>
+        </div>
+
+
+        <small> </small>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_tree_view"
+            class="extra-network-control--tree-view {tree_view_btn_extra_class}"
+            title="Enable Tree View"
+            onclick="extraNetworksControlTreeViewOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--tree-view-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_refresh"
+            class="extra-network-control--refresh"
+            title="Refresh page"
+            onclick="extraNetworksControlRefreshOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--refresh-icon"></i>
+        </div>
+    </div>
+    {pane_content}
+</div>
+
+```
+
+```extra-networks-tree-button.html
+<span data-filterable-item-text hidden>{search_terms}</span>
+<div class="tree-list-content {subclass}"
+    type="button"
+    onclick="extraNetworksTreeOnClick(event, '{tabname}', '{extra_networks_tabname}');{onclick_extra}"
+    data-path="{data_path}"
+    data-hash="{data_hash}"
+>
+    <span class='tree-list-item-action tree-list-item-action--leading'>
+        {action_list_item_action_leading}
+    </span>
+    <span class="tree-list-item-visual tree-list-item-visual--leading">
+        {action_list_item_visual_leading}
+    </span>
+    <span class="tree-list-item-label tree-list-item-label--truncate">
+        {action_list_item_label}
+    </span>
+    <span class="tree-list-item-visual tree-list-item-visual--trailing">
+        {action_list_item_visual_trailing}
+    </span>
+    <span class="tree-list-item-action tree-list-item-action--trailing">
+        {action_list_item_action_trailing}
+    </span>
+</div>
+```
+
+```footer.html
+<div>
+        <a href="{api_docs}" target="_blank">API</a>
+         • 
+        <a href="https://github.com/Panchovix/stable-diffusion-webui-reForge">GitHub</a>
+         • 
+        <a href="https://gradio.app">Gradio</a>
+         • 
+        <a href="#" onclick="showProfile('./internal/profile-startup'); return false;">Startup profile</a>
+         • 
+        <a href="/" onclick="javascript:gradioApp().getElementById('settings_restart_gradio').click(); return false">Reload UI</a>
+</div>
+<br />
+<div class="versions">
+{versions}
+</div>
+
+```
