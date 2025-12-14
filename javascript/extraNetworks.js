@@ -181,7 +181,8 @@ var VirtualScrollManager = (function () {
             // Setup event listeners
             this.setupEvents();
 
-            // this.preloadAllImages();
+            // ここを有効にすると一度にすべてのアイテムをプリロードする
+            this.preloadAllImages();
             this.isInitialized = true;
             return true;
         },
