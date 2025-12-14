@@ -182,7 +182,7 @@ var VirtualScrollManager = (function () {
             this.setupEvents();
 
             // ここを有効にすると一度にすべてのアイテムをプリロードする
-            this.preloadAllImages();
+            // this.preloadAllImages();
             this.isInitialized = true;
             return true;
         },
@@ -503,14 +503,35 @@ var VirtualScrollManager = (function () {
         /**
          * Apply search filter
          */
-        applyFilter: function (searchTerm) {
+        applyFilter: function (searchTerm, useRegex) {
             var self = this;
-            searchTerm = searchTerm.toLowerCase().trim();
+            useRegex = useRegex || false;
+
+            if (!useRegex) {
+                searchTerm = searchTerm.toLowerCase().trim();
+            } else {
+                searchTerm = searchTerm.trim();
+            }
 
             this.filteredCards = [];
 
             this.allCards.forEach(function (cardData) {
-                var visible = cardData.searchText.indexOf(searchTerm) !== -1;
+                var visible = false;
+
+                if (useRegex) {
+                    // Regex search
+                    try {
+                        var regex = new RegExp(searchTerm, 'i');
+                        visible = regex.test(cardData.searchText);
+                    } catch (e) {
+                        // Invalid regex, treat as no match
+                        visible = false;
+                    }
+                } else {
+                    // Normal search (case-insensitive)
+                    visible = cardData.searchText.indexOf(searchTerm) !== -1;
+                }
+
                 if (cardData.searchOnly && searchTerm.length < 4) {
                     visible = false;
                 }
@@ -614,7 +635,11 @@ var VirtualScrollManager = (function () {
         applyFilter: function (tabname_full, searchTerm) {
             var instance = instances[tabname_full];
             if (instance && instance.isInitialized) {
-                instance.applyFilter(searchTerm);
+                var regexCheckbox = gradioApp().querySelector(
+                    "#" + tabname_full + "_extra_regex"
+                );
+                var useRegex = regexCheckbox && regexCheckbox.checked;
+                instance.applyFilter(searchTerm, useRegex);
                 return true;
             }
             return false;
@@ -728,7 +753,17 @@ function setupExtraNetworksForTab(tabname) {
             var useVirtual = VirtualScrollManager.init(tabname_full);
 
             var applyFilter = function (force) {
-                var searchTerm = search.value.toLowerCase();
+                var regexCheckbox = gradioApp().querySelector(
+                    "#" + tabname_full + "_extra_regex"
+                );
+                var useRegex = regexCheckbox && regexCheckbox.checked;
+                var searchTerm = search.value;
+
+                if (!useRegex) {
+                    searchTerm = searchTerm.toLowerCase();
+                } else {
+                    searchTerm = searchTerm.trim();
+                }
 
                 if (useVirtual && VirtualScrollManager.isActive(tabname_full)) {
                     VirtualScrollManager.applyFilter(tabname_full, searchTerm);
@@ -751,7 +786,22 @@ function setupExtraNetworksForTab(tabname) {
                                 )
                                 .join(" ");
 
-                            var visible = text.indexOf(searchTerm) != -1;
+                            var visible = false;
+
+                            if (useRegex) {
+                                // Regex search
+                                try {
+                                    var regex = new RegExp(searchTerm, 'i');
+                                    visible = regex.test(text);
+                                } catch (e) {
+                                    // Invalid regex, treat as no match
+                                    visible = false;
+                                }
+                            } else {
+                                // Normal search (case-insensitive)
+                                visible = text.indexOf(searchTerm) != -1;
+                            }
+
                             if (searchOnly && searchTerm.length < 4) {
                                 visible = false;
                             }
@@ -833,6 +883,16 @@ function setupExtraNetworksForTab(tabname) {
             search.addEventListener("input", function () {
                 applyFilter();
             });
+
+            var regexCheckbox = gradioApp().querySelector(
+                "#" + tabname_full + "_extra_regex"
+            );
+            if (regexCheckbox) {
+                regexCheckbox.addEventListener("change", function () {
+                    applyFilter();
+                });
+            }
+
             applySort();
             applyFilter();
 

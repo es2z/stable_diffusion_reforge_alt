@@ -1,6 +1,14 @@
 <div id='{tabname}_{extra_networks_tabname}_pane' class='extra-network-pane {tree_view_div_default_display_class}'>
     <div class="extra-network-control" id="{tabname}_{extra_networks_tabname}_controls" style="display:none" >
         <div class="extra-network-control--search">
+             <span class="extra-network-control--search-icon">🔎︎</span>
+            <input
+                id="{tabname}_{extra_networks_tabname}_extra_regex"
+                class="extra-network-control--regex-checkbox"
+                type="checkbox"
+                title="Use regular expression for search"
+            >
+            <label for="{tabname}_{extra_networks_tabname}_extra_regex" title="Use regular expression for search">Regex</label>
             <input
                 id="{tabname}_{extra_networks_tabname}_extra_search"
                 class="extra-network-control--search-text"

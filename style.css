@@ -1442,8 +1442,34 @@ body.resizing .resize-handle {
 }
 
 .extra-network-control .extra-network-control--search {
-    display: inline-flex;
+    display: flex;
     position: relative;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.extra-network-control .extra-network-control--search .extra-network-control--regex-checkbox {
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+    margin: 0 0.25rem 0 0;
+    padding: 0;
+    flex-shrink: 0;
+    accent-color: var(--button-secondary-text-color);
+   appearance: checkbox;
+    -webkit-appearance: checkbox;
+}
+
+.extra-network-control .extra-network-control--search label {
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    font-size: 0.9rem;
+    margin: 0;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
 }
 
 .extra-network-control .extra-network-control--search .extra-network-control--search-text {
@@ -1451,7 +1477,8 @@ body.resizing .resize-handle {
     border-radius: 0.5rem;
     color: var(--button-secondary-text-color);
     background-color: transparent;
-    width: 100%;
+    flex: 1;
+    min-width: 150px;
     padding-left: 2rem;
     line-height: 1rem;
 }
