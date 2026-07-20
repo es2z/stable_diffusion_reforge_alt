@@ -1432,15 +1432,14 @@ body.resizing .resize-handle {
 }
 
 /* ==== SEARCH INPUT ACTIONS ==== */
-/* Add icon to left side of <input> */
-.extra-network-control .extra-network-control--search::before {
-    content: "🔎︎";
-    position: absolute;
-    margin: 0.5rem;
+/* Search icon element */
+.extra-network-control .extra-network-control--search .extra-network-control--search-icon {
     font-size: 1rem;
     color: var(--input-placeholder-color);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
 }
-
 .extra-network-control .extra-network-control--search {
     display: flex;
     position: relative;
@@ -1479,7 +1478,7 @@ body.resizing .resize-handle {
     background-color: transparent;
     flex: 1;
     min-width: 150px;
-    padding-left: 2rem;
+    padding-left: 0.5rem;
     line-height: 1rem;
 }
 
