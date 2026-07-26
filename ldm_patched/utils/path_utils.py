@@ -1,12 +1,14 @@
 # Original code from Comfy, https://github.com/comfyanonymous/ComfyUI
-
-
+from __future__ import annotations
 
 import os
 import time
+import mimetypes
 import logging
+from typing import Literal
+from collections.abc import Collection
 
-supported_pt_extensions = set(['.ckpt', '.pt', '.bin', '.pth', '.safetensors', '.pkl'])
+supported_pt_extensions: set[str] = {'.ckpt', '.pt', '.pt2', '.bin', '.pth', '.safetensors', '.pkl', '.sft'}
 
 folder_names_and_paths = {}
 
@@ -20,33 +22,73 @@ user_directory = None
 
 filename_list_cache = {}
 
-def set_output_directory(output_dir):
+def set_output_directory(output_dir: str) -> None:
     global output_directory
     output_directory = output_dir
 
-def set_temp_directory(temp_dir):
+def set_temp_directory(temp_dir: str) -> None:
     global temp_directory
     temp_directory = temp_dir
 
-def set_input_directory(input_dir):
+def set_input_directory(input_dir: str) -> None:
     global input_directory
     input_directory = input_dir
 
-def get_output_directory():
+def get_output_directory() -> str:
     global output_directory
     return output_directory
 
-def get_temp_directory():
+def get_temp_directory() -> str:
     global temp_directory
     return temp_directory
 
-def get_input_directory():
+def get_input_directory() -> str:
     global input_directory
     return input_directory
 
+def get_full_path_or_raise(folder_name: str, filename: str) -> str:
+    """
+    Get the full path of a file in a folder, has to be a file
+    """
+    full_path = get_full_path(folder_name, filename)
+    if full_path is None:
+        raise FileNotFoundError(f"Model in folder '{folder_name}' with filename '{filename}' not found.")
+    return full_path
+
+extension_mimetypes_cache = {
+    "webp" : "image",
+    "fbx" : "model",
+}
+
+def filter_files_content_types(files: list[str], content_types: List[Literal["image", "video", "audio", "model"]]) -> list[str]:
+    """
+    Example:
+        files = os.listdir(folder_paths.get_input_directory())
+        videos = filter_files_content_types(files, ["video"])
+
+    Note:
+        - 'model' in MIME context refers to 3D models, not files containing trained weights and parameters
+    """
+    global extension_mimetypes_cache
+    result = []
+    for file in files:
+        extension = file.split('.')[-1]
+        if extension not in extension_mimetypes_cache:
+            mime_type, _ = mimetypes.guess_type(file, strict=False)
+            if not mime_type:
+                continue
+            content_type = mime_type.split('/')[0]
+            extension_mimetypes_cache[extension] = content_type
+        else:
+            content_type = extension_mimetypes_cache[extension]
+
+        if content_type in content_types:
+            result.append(file)
+    return result
+
 
 #NOTE: used in http server so don't put folders that should not be accessed remotely
-def get_directory_by_type(type_name):
+def get_directory_by_type(type_name: str) -> str | None:
     if type_name == "output":
         return get_output_directory()
     if type_name == "temp":

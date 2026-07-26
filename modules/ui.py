@@ -41,6 +41,7 @@ mimetypes.add_type('application/javascript', '.js')
 
 # Likewise, add explicit content-type header for certain missing image types
 mimetypes.add_type('image/webp', '.webp')
+mimetypes.add_type('image/avif', '.avif')
 
 # override potentially incorrect mimetypes
 mimetypes.add_type('text/css', '.css')
@@ -304,7 +305,7 @@ def create_ui():
                             if opts.dimensions_and_batch_together:
                                 with gr.Column(elem_id="txt2img_column_batch"):
                                     batch_count = gr.Slider(minimum=1, step=1, label='Batch count', value=1, elem_id="txt2img_batch_count")
-                                    batch_size = gr.Slider(minimum=1, maximum=8, step=1, label='Batch size', value=1, elem_id="txt2img_batch_size")
+                                    batch_size = gr.Slider(minimum=1, maximum=50, step=1, label='Batch size', value=1, elem_id="txt2img_batch_size")
 
                     elif category == "cfg":
                         with gr.Row():
@@ -349,7 +350,7 @@ def create_ui():
                                         with gr.Row():
                                             hr_negative_prompt = gr.Textbox(label="Hires negative prompt", elem_id="hires_neg_prompt", show_label=False, lines=3, placeholder="Negative prompt for hires fix pass.\nLeave empty to use the same negative prompt as in first pass.", elem_classes=["prompt"])
 
-                                hr_cfg.change(lambda x: gr.update(interactive=(x != 1)), inputs=[hr_cfg], outputs=[hr_negative_prompt], queue=False, show_progress=False)
+                                hr_cfg.change(lambda x: gr.update(interactive=True), inputs=[hr_cfg], outputs=[hr_negative_prompt], queue=False, show_progress=False)
 
                             scripts.scripts_txt2img.setup_ui_for_section(category)
 
@@ -357,7 +358,7 @@ def create_ui():
                         if not opts.dimensions_and_batch_together:
                             with FormRow(elem_id="txt2img_column_batch"):
                                 batch_count = gr.Slider(minimum=1, step=1, label='Batch count', value=1, elem_id="txt2img_batch_count")
-                                batch_size = gr.Slider(minimum=1, maximum=8, step=1, label='Batch size', value=1, elem_id="txt2img_batch_size")
+                                batch_size = gr.Slider(minimum=1, maximum=50, step=1, label='Batch size', value=1, elem_id="txt2img_batch_size")
 
                     elif category == "override_settings":
                         with FormRow(elem_id="txt2img_override_settings_row") as row:
@@ -665,7 +666,7 @@ def create_ui():
                             if opts.dimensions_and_batch_together:
                                 with gr.Column(elem_id="img2img_column_batch"):
                                     batch_count = gr.Slider(minimum=1, step=1, label='Batch count', value=1, elem_id="img2img_batch_count")
-                                    batch_size = gr.Slider(minimum=1, maximum=8, step=1, label='Batch size', value=1, elem_id="img2img_batch_size")
+                                    batch_size = gr.Slider(minimum=1, maximum=50, step=1, label='Batch size', value=1, elem_id="img2img_batch_size")
 
                     elif category == "denoising":
                         denoising_strength = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label='Denoising strength', value=0.75, elem_id="img2img_denoising_strength")
@@ -687,7 +688,7 @@ def create_ui():
                         if not opts.dimensions_and_batch_together:
                             with FormRow(elem_id="img2img_column_batch"):
                                 batch_count = gr.Slider(minimum=1, step=1, label='Batch count', value=1, elem_id="img2img_batch_count")
-                                batch_size = gr.Slider(minimum=1, maximum=8, step=1, label='Batch size', value=1, elem_id="img2img_batch_size")
+                                batch_size = gr.Slider(minimum=1, maximum=50, step=1, label='Batch size', value=1, elem_id="img2img_batch_size")
 
                     elif category == "override_settings":
                         with FormRow(elem_id="img2img_override_settings_row") as row:
@@ -880,7 +881,7 @@ def create_ui():
     with gr.Blocks(analytics_enabled=False) as pnginfo_interface:
         with ResizeHandleRow(equal_height=False):
             with gr.Column(variant='panel'):
-                image = gr.Image(elem_id="pnginfo_image", label="Source", source="upload", interactive=True, type="pil")
+                image = gr.Image(elem_id="pnginfo_image", label="Source", source="upload", interactive=True, type="pil", image_mode="RGBA")
 
             with gr.Column(variant='panel'):
                 html = gr.HTML()

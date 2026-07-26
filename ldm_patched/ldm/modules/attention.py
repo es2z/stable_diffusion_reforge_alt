@@ -1,19 +1,15 @@
-# 1st edit by https://github.com/CompVis/latent-diffusion
-# 2nd edit by https://github.com/Stability-AI/stablediffusion
-# 3rd edit by https://github.com/Stability-AI/generative-models
-# 4th edit by https://github.com/comfyanonymous/ComfyUI
-# 5th edit by Forge
-
-
 import math
+import sys
+
 import torch
 import torch.nn.functional as F
 from torch import nn, einsum
 from einops import rearrange, repeat
-from typing import Optional, Any
+from typing import Optional
 import logging
+import os
 
-from .diffusionmodules.util import checkpoint, AlphaBlender, timestep_embedding
+from .diffusionmodules.util import AlphaBlender, timestep_embedding
 from .sub_quadratic_attention import efficient_dot_product_attention
 
 from ldm_patched.modules import model_management
@@ -23,28 +19,70 @@ if model_management.xformers_enabled():
     import xformers.ops
 
 if model_management.sage_attention_enabled():
-    from sageattention import sageattn
+    try:
+        from sageattention import sageattn
+        print("Found SageAttention 1.x/2.x (sageattention package)")
+    except ModuleNotFoundError as e:
+        if e.name == "sageattention":
+            logging.error(f"\n\nTo use the `--use-sage-attention` feature, the `sageattention` package must be installed first.\ncommand:\n\t{sys.executable} -m pip install sageattention")
+        else:
+            raise e
+        exit(-1)
+
+if model_management.sage_attention3_enabled():
+    try:
+        from sageattn import sageattn_blackwell
+        print("Found SageAttention3 (sageattn package)")
+    except ModuleNotFoundError as e:
+        if e.name == "sageattn":
+            logging.error(f"\n\nTo use the `--use-sage-attention3` feature, the `sageattn` package must be installed first.\ncommand:\n\t{sys.executable} -m pip install sageattn")
+        else:
+            raise e
+        exit(-1)
+
+if model_management.flash_attention_enabled():
+    try:
+        from flash_attn import flash_attn_func
+    except ModuleNotFoundError:
+        logging.error(f"\n\nTo use the `--use-flash-attention` feature, the `flash-attn` package must be installed first.\ncommand:\n\t{sys.executable} -m pip install flash-attn")
+        exit(-1)
 
 from ldm_patched.modules.args_parser import args
 import ldm_patched.modules.ops
 ops = ldm_patched.modules.ops.disable_weight_init
 
-# CrossAttn precision handling
-if args.disable_attention_upcast:
-    print("disabling upcasting of attention")
-    _ATTN_PRECISION = "fp16"
-else:
-    _ATTN_PRECISION = "fp32"
-
 FORCE_UPCAST_ATTENTION_DTYPE = model_management.force_upcast_attention_dtype()
 
-def get_attn_precision(attn_precision):
-    if args.disable_attention_upcast:
+def get_attn_precision(attn_precision, current_dtype):
+    if args.force_upcast_attention:
         return None
-    if FORCE_UPCAST_ATTENTION_DTYPE is not None:
-        return FORCE_UPCAST_ATTENTION_DTYPE
+
+    if FORCE_UPCAST_ATTENTION_DTYPE is not None and current_dtype in FORCE_UPCAST_ATTENTION_DTYPE:
+        return FORCE_UPCAST_ATTENTION_DTYPE[current_dtype]
     return attn_precision
 
+
+class AttnPrecision:
+    def __init__(self):
+        self._value = self._get_precision()
+
+    def _get_precision(self):
+        return get_attn_precision(os.environ.get("ATTN_PRECISION", "fp32"), None)
+
+    def __str__(self):
+        return self._value
+
+    def __eq__(self, other):
+        return str(self) == other
+
+    def update(self):
+        self._value = self._get_precision()
+
+# Create an instance of AttnPrecision
+_ATTN_PRECISION = AttnPrecision()
+
+def update_attn_precision():
+    _ATTN_PRECISION.update()
 
 def exists(val):
     return val is not None
@@ -105,7 +143,7 @@ def Normalize(in_channels, dtype=None, device=None):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True, dtype=dtype, device=device)
 
 def attention_basic(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
-    attn_precision = get_attn_precision(attn_precision)
+    attn_precision = get_attn_precision(attn_precision, q.dtype)
 
     if skip_reshape:
         b, _, _, dim_head = q.shape
@@ -174,7 +212,7 @@ def attention_basic(q, k, v, heads, mask=None, attn_precision=None, skip_reshape
 
 
 def attention_sub_quad(query, key, value, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
-    attn_precision = get_attn_precision(attn_precision)
+    attn_precision = get_attn_precision(attn_precision, query.dtype)
 
     if skip_reshape:
         b, _, _, dim_head = query.shape
@@ -244,7 +282,7 @@ def attention_sub_quad(query, key, value, heads, mask=None, attn_precision=None,
     return hidden_states
 
 def attention_split(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
-    attn_precision = get_attn_precision(attn_precision)
+    attn_precision = get_attn_precision(attn_precision, q.dtype)
 
     if skip_reshape:
         b, _, _, dim_head = q.shape
@@ -367,8 +405,8 @@ def attention_split(q, k, v, heads, mask=None, attn_precision=None, skip_reshape
 BROKEN_XFORMERS = False
 try:
     x_vers = xformers.__version__
-    #I think 0.0.23 is also broken (q with bs bigger than 65535 gives CUDA error)
-    BROKEN_XFORMERS = x_vers.startswith("0.0.21") or x_vers.startswith("0.0.22") or x_vers.startswith("0.0.23")
+    # XFormers bug confirmed on all versions from 0.0.21 to 0.0.26 (q with bs bigger than 65535 gives CUDA error)
+    BROKEN_XFORMERS = x_vers.startswith("0.0.2") and not x_vers.startswith("0.0.20")
 except:
     pass
 
@@ -440,6 +478,7 @@ else:
     #TODO: other GPUs ?
     SDP_BATCH_LIMIT = 2**31
 
+
 def attention_pytorch(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
     if skip_reshape:
         b, _, _, dim_head = q.shape
@@ -486,7 +525,7 @@ def attention_pytorch(q, k, v, heads, mask=None, attn_precision=None, skip_resha
 def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
     if skip_reshape:
         b, _, _, dim_head = q.shape
-        tensor_layout="HND"
+        tensor_layout = "HND"
     else:
         b, _, dim_head = q.shape
         dim_head //= heads
@@ -494,7 +533,7 @@ def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=
             lambda t: t.view(b, -1, heads, dim_head),
             (q, k, v),
         )
-        tensor_layout="NHD"
+        tensor_layout = "NHD"
 
     if mask is not None:
         # add a batch dimension if there isn't already one
@@ -504,7 +543,16 @@ def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=
         if mask.ndim == 3:
             mask = mask.unsqueeze(1)
 
-    out = sageattn(q, k, v, attn_mask=mask, is_causal=False, tensor_layout=tensor_layout)
+    try:
+        out = sageattn(q, k, v, attn_mask=mask, is_causal=False, tensor_layout=tensor_layout)
+    except Exception as e:
+        logging.error("Error running sage attention: {}, using pytorch attention instead.".format(e))
+        if tensor_layout == "NHD":
+            q, k, v = map(
+                lambda t: t.transpose(1, 2),
+                (q, k, v),
+            )
+        return attention_pytorch(q, k, v, heads, mask=mask, skip_reshape=True, skip_output_reshape=skip_output_reshape)
     if tensor_layout == "HND":
         if not skip_output_reshape:
             out = (
@@ -518,14 +566,136 @@ def attention_sage(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=
     return out
 
 
+def attention_sage3(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+        tensor_layout = "HND"
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = map(
+            lambda t: t.view(b, -1, heads, dim_head),
+            (q, k, v),
+        )
+        tensor_layout = "NHD"
+
+    if mask is not None:
+        # add a batch dimension if there isn't already one
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)
+        # add a heads dimension if there isn't already one
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+
+    try:
+        if dim_head >= 256:
+            # SageAttention3 doesn't support head_dim >= 256, fall back to pytorch
+            logging.warning(f"SageAttention3 doesn't support head_dim >= 256 (got {dim_head}), falling back to pytorch attention")
+            if tensor_layout == "NHD":
+                q, k, v = map(
+                    lambda t: t.transpose(1, 2),
+                    (q, k, v),
+                )
+            return attention_pytorch(q, k, v, heads, mask=mask, skip_reshape=True, skip_output_reshape=skip_output_reshape)
+        
+        # SageAttention3 expects tensor layout as (batch, heads, seq_len, head_dim)
+        if tensor_layout == "NHD":
+            q_sa3, k_sa3, v_sa3 = map(lambda t: t.transpose(1, 2), (q, k, v))
+        else:
+            q_sa3, k_sa3, v_sa3 = q, k, v
+        
+        out = sageattn_blackwell(q_sa3, k_sa3, v_sa3, attn_mask=mask, is_causal=False, per_block_mean=False)
+        
+        # Convert back to expected layout
+        if tensor_layout == "HND":
+            if not skip_output_reshape:
+                out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+        else:
+            if skip_output_reshape:
+                out = out.transpose(1, 2)
+            else:
+                out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    except Exception as e:
+        logging.error("Error running sage attention 3: {}, using pytorch attention instead.".format(e))
+        if tensor_layout == "NHD":
+            q, k, v = map(
+                lambda t: t.transpose(1, 2),
+                (q, k, v),
+            )
+        return attention_pytorch(q, k, v, heads, mask=mask, skip_reshape=True, skip_output_reshape=skip_output_reshape)
+    return out
+
+try:
+    @torch.library.custom_op("flash_attention::flash_attn", mutates_args=())
+    def flash_attn_wrapper(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                    dropout_p: float = 0.0, causal: bool = False) -> torch.Tensor:
+        return flash_attn_func(q, k, v, dropout_p=dropout_p, causal=causal)
+
+
+    @flash_attn_wrapper.register_fake
+    def flash_attn_fake(q, k, v, dropout_p=0.0, causal=False):
+        # Output shape is the same as q
+        return q.new_empty(q.shape)
+except AttributeError as error:
+    FLASH_ATTN_ERROR = error
+
+    def flash_attn_wrapper(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                    dropout_p: float = 0.0, causal: bool = False) -> torch.Tensor:
+        assert False, f"Could not define flash_attn_wrapper: {FLASH_ATTN_ERROR}"
+
+
+def attention_flash(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = map(
+            lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2),
+            (q, k, v),
+        )
+
+    if mask is not None:
+        # add a batch dimension if there isn't already one
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)
+        # add a heads dimension if there isn't already one
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+
+    try:
+        assert mask is None
+        out = flash_attn_wrapper(
+            q.transpose(1, 2),
+            k.transpose(1, 2),
+            v.transpose(1, 2),
+            dropout_p=0.0,
+            causal=False,
+        ).transpose(1, 2)
+    except Exception as e:
+        logging.warning(f"Flash Attention failed, using default SDPA: {e}")
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
+    if not skip_output_reshape:
+        out = (
+            out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+        )
+    return out
+
+
 optimized_attention = attention_basic
 
-if model_management.sage_attention_enabled():
-    print("Using sage attention")
+if model_management.sage_attention3_enabled():
+    print("Using sage attention 3")
+    optimized_attention = attention_sage3
+elif model_management.sage_attention_enabled():
+    print("Using sage attention 1.x/2.x")
     optimized_attention = attention_sage
 elif model_management.xformers_enabled():
     print("Using xformers attention")
     optimized_attention = attention_xformers
+elif model_management.flash_attention_enabled():
+    print("Using Flash Attention")
+    optimized_attention = attention_flash
 elif model_management.pytorch_attention_enabled():
     print("Using pytorch attention")
     optimized_attention = attention_pytorch
@@ -534,7 +704,7 @@ else:
         print("Using split optimization for attention")
         optimized_attention = attention_split
     else:
-        print("Using sub quadratic optimization for attention, if you have memory or speed issues try using: --attention-split")
+        print("Using sub quadratic optimization for attention, if you have memory or speed issues try using: --use-split-cross-attention")
         optimized_attention = attention_sub_quad
 
 optimized_attention_masked = optimized_attention
@@ -556,10 +726,11 @@ def optimized_attention_for_device(device, mask=False, small_input=False):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., dtype=None, device=None, operations=ops):
+    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., attn_precision=None, dtype=None, device=None, operations=ops):
         super().__init__()
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
+        self.attn_precision = attn_precision
 
         self.heads = heads
         self.dim_head = dim_head
@@ -570,7 +741,7 @@ class CrossAttention(nn.Module):
 
         self.to_out = nn.Sequential(operations.Linear(inner_dim, query_dim, dtype=dtype, device=device), nn.Dropout(dropout))
 
-    def forward(self, x, context=None, value=None, mask=None, transformer_options=None):
+    def forward(self, x, context=None, value=None, mask=None):
         q = self.to_q(x)
         context = default(context, x)
         k = self.to_k(context)
@@ -581,15 +752,15 @@ class CrossAttention(nn.Module):
             v = self.to_v(context)
 
         if mask is None:
-            out = optimized_attention(q, k, v, self.heads)
+            out = optimized_attention(q, k, v, self.heads, attn_precision=self.attn_precision)
         else:
-            out = optimized_attention_masked(q, k, v, self.heads, mask)
+            out = optimized_attention_masked(q, k, v, self.heads, mask, attn_precision=self.attn_precision)
         return self.to_out(out)
 
 
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, ff_in=False, inner_dim=None,
-                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops):
+                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, attn_precision=None, dtype=None, device=None, operations=ops):
         super().__init__()
 
         self.ff_in = ff_in or inner_dim is not None
@@ -597,6 +768,7 @@ class BasicTransformerBlock(nn.Module):
             inner_dim = dim
 
         self.is_res = inner_dim == dim
+        self.attn_precision = attn_precision
 
         if self.ff_in:
             self.norm_in = operations.LayerNorm(dim, dtype=dtype, device=device)
@@ -604,7 +776,7 @@ class BasicTransformerBlock(nn.Module):
 
         self.disable_self_attn = disable_self_attn
         self.attn1 = CrossAttention(query_dim=inner_dim, heads=n_heads, dim_head=d_head, dropout=dropout,
-                              context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations)  # is a self-attention if not self.disable_self_attn
+                              context_dim=context_dim if self.disable_self_attn else None, attn_precision=self.attn_precision, dtype=dtype, device=device, operations=operations)  # is a self-attention if not self.disable_self_attn
         self.ff = FeedForward(inner_dim, dim_out=dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations)
 
         if disable_temporal_crossattention:
@@ -618,20 +790,16 @@ class BasicTransformerBlock(nn.Module):
                 context_dim_attn2 = context_dim
 
             self.attn2 = CrossAttention(query_dim=inner_dim, context_dim=context_dim_attn2,
-                                heads=n_heads, dim_head=d_head, dropout=dropout, dtype=dtype, device=device, operations=operations)  # is self-attn if context is none
+                                heads=n_heads, dim_head=d_head, dropout=dropout, attn_precision=self.attn_precision, dtype=dtype, device=device, operations=operations)  # is self-attn if context is none
             self.norm2 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
 
         self.norm1 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
         self.norm3 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
-        self.checkpoint = checkpoint
         self.n_heads = n_heads
         self.d_head = d_head
         self.switch_temporal_ca_to_sa = switch_temporal_ca_to_sa
 
     def forward(self, x, context=None, transformer_options={}):
-        return checkpoint(self._forward, (x, context, transformer_options), self.parameters(), self.checkpoint)
-
-    def _forward(self, x, context=None, transformer_options={}):
         extra_options = {}
         block = transformer_options.get("block", None)
         block_index = transformer_options.get("block_index", 0)
@@ -648,7 +816,7 @@ class BasicTransformerBlock(nn.Module):
 
         extra_options["n_heads"] = self.n_heads
         extra_options["dim_head"] = self.d_head
-        # extra_options["attn_precision"] = self.attn_precision
+        extra_options["attn_precision"] = self.attn_precision
 
         if self.ff_in:
             x_skip = x
@@ -697,7 +865,7 @@ class BasicTransformerBlock(nn.Module):
             for p in patch:
                 n = p(n, extra_options)
 
-        x += n
+        x = n + x
         if "middle_patch" in transformer_patches:
             patch = transformer_patches["middle_patch"]
             for p in patch:
@@ -737,12 +905,12 @@ class BasicTransformerBlock(nn.Module):
             for p in patch:
                 n = p(n, extra_options)
 
-        x += n
+        x = n + x
         if self.is_res:
             x_skip = x
         x = self.ff(self.norm3(x))
         if self.is_res:
-            x += x_skip
+            x = x_skip + x
 
         return x
 
@@ -759,7 +927,7 @@ class SpatialTransformer(nn.Module):
     def __init__(self, in_channels, n_heads, d_head,
                  depth=1, dropout=0., context_dim=None,
                  disable_self_attn=False, use_linear=False,
-                 use_checkpoint=True, dtype=None, device=None, operations=ops):
+                 use_checkpoint=True, attn_precision=None, dtype=None, device=None, operations=ops):
         super().__init__()
         if exists(context_dim) and not isinstance(context_dim, list):
             context_dim = [context_dim] * depth
@@ -777,7 +945,7 @@ class SpatialTransformer(nn.Module):
 
         self.transformer_blocks = nn.ModuleList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim[d],
-                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations)
+                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, attn_precision=attn_precision, dtype=dtype, device=device, operations=operations)
                 for d in range(depth)]
         )
         if not use_linear:
@@ -794,6 +962,7 @@ class SpatialTransformer(nn.Module):
         if not isinstance(context, list):
             context = [context] * len(self.transformer_blocks)
         b, c, h, w = x.shape
+        transformer_options["activations_shape"] = list(x.shape)
         x_in = x
         x = self.norm(x)
         if not self.use_linear:
@@ -810,6 +979,7 @@ class SpatialTransformer(nn.Module):
         if not self.use_linear:
             x = self.proj_out(x)
         return x + x_in
+
 
 class SpatialVideoTransformer(SpatialTransformer):
     def __init__(
@@ -832,6 +1002,7 @@ class SpatialVideoTransformer(SpatialTransformer):
         disable_self_attn=False,
         disable_temporal_crossattention=False,
         max_time_embed_period: int = 10000,
+        attn_precision=None,
         dtype=None, device=None, operations=ops
     ):
         super().__init__(
@@ -844,6 +1015,7 @@ class SpatialVideoTransformer(SpatialTransformer):
             context_dim=context_dim,
             use_linear=use_linear,
             disable_self_attn=disable_self_attn,
+            attn_precision=attn_precision,
             dtype=dtype, device=device, operations=operations
         )
         self.time_depth = time_depth
@@ -873,6 +1045,7 @@ class SpatialVideoTransformer(SpatialTransformer):
                     inner_dim=time_mix_inner_dim,
                     disable_self_attn=disable_self_attn,
                     disable_temporal_crossattention=disable_temporal_crossattention,
+                    attn_precision=attn_precision,
                     dtype=dtype, device=device, operations=operations
                 )
                 for _ in range(self.depth)
@@ -905,6 +1078,7 @@ class SpatialVideoTransformer(SpatialTransformer):
         transformer_options={}
     ) -> torch.Tensor:
         _, _, h, w = x.shape
+        transformer_options["activations_shape"] = list(x.shape)
         x_in = x
         spatial_context = None
         if exists(context):

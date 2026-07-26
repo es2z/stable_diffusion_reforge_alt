@@ -10,9 +10,9 @@ import modules.shared as shared
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
 
 if opts.sd_sampling == "A1111":
-    import k_diffusion
-    from k_diffusion import sampling
-    from k_diffusion.external import CompVisDenoiser, CompVisVDenoiser
+    import k_diff.k_diffusion
+    from k_diff.k_diffusion import sampling
+    from k_diff.k_diffusion.external import CompVisDenoiser, CompVisVDenoiser
 elif opts.sd_sampling == "ldm patched (Comfy)":
     import ldm_patched.k_diffusion
     from ldm_patched.k_diffusion import sampling
@@ -27,6 +27,7 @@ samplers_k_diffusion = [
     ('DPM++ 2S a', 'sample_dpmpp_2s_ancestral', ['k_dpmpp_2s_a'], {'scheduler': 'karras', "uses_ensd": True, "second_order": True}),
     ('DPM++ 3M SDE', 'sample_dpmpp_3m_sde', ['k_dpmpp_3m_sde'], {'scheduler': 'exponential', 'discard_next_to_last_sigma': True, "brownian_noise": True}),
     ('Euler a', 'sample_euler_ancestral', ['k_euler_a', 'k_euler_ancestral'], {"uses_ensd": True}),
+    ('Euler A2', 'sample_euler_a2', ['k_euler_a2'], {"uses_ensd": True}),
     ('Euler', 'sample_euler', ['k_euler'], {}),
     ('LMS', 'sample_lms', ['k_lms'], {}),
     ('Heun', 'sample_heun', ['k_heun'], {"second_order": True}),
@@ -42,7 +43,7 @@ additional_samplers = [
     ('Euler SMEA Dy', 'sample_euler_smea_dy', ['k_euler_smea_dy'], {}),
     ('Euler Negative', 'sample_euler_negative', ['k_euler_negative'], {}),
     ('Euler Negative Dy', 'sample_euler_dy_negative', ['k_euler_dy_negative'], {}),
-    ('Kohaku_LoNyu_Yog', 'sample_Kohaku_LoNyu_Yog', ['k_euler_dy_negative'], {}),
+    # ('Kohaku_LoNyu_Yog', 'sample_Kohaku_LoNyu_Yog', ['k_euler_dy_negative'], {}),
 ]
 samplers_k_diffusion.extend(additional_samplers)
 
@@ -70,7 +71,6 @@ sampler_extra_params.update({
     'sample_euler_smea_dy': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
     'sample_euler_negative': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
     'sample_euler_dy_negative': ['s_churn', 's_tmin', 's_tmax', 's_noise'],
-    'sample_Kohaku_LoNyu_Yog': ["s_churn", "s_tmin", "s_tmax", "s_noise"],
 })
 
 k_diffusion_samplers_map = {x.name: x for x in samplers_data_k_diffusion}
@@ -121,7 +121,6 @@ class CFGDenoiserKDiffusion(sd_samplers_cfg_denoiser.CFGDenoiser):
 class KDiffusionSampler(sd_samplers_common.Sampler):
     def __init__(self, funcname, sd_model, options=None):
         super().__init__(funcname)
-
         self.extra_params = sampler_extra_params.get(funcname, [])
         
         self.options = options or {}
@@ -313,5 +312,4 @@ class KDiffusionSampler(sd_samplers_common.Sampler):
         sampling_cleanup(unet_patcher)
 
         return samples
-
 

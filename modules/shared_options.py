@@ -103,6 +103,8 @@ options_templates.update(options_section(('upscaling', "Upscaling", "postprocess
     "ESRGAN_tile_overlap": OptionInfo(32, "Tile overlap for ESRGAN upscalers.", gr.Slider, {"minimum": 0, "maximum": 2048, "step": 8}).info("Low values = visible seam"),
     "RCAN_tile": OptionInfo(512, "Tile size for RCAN upscaler. 0 = no tiling.", gr.Slider, {"minimum": 0, "maximum": 4096, "step": 16}),
     "RCAN_tile_overlap": OptionInfo(32, "Tile overlap for RCAN upscaler. Higher values = fewer artifacts but slower processing.", gr.Slider, {"minimum": 0, "maximum": 2048, "step": 8}),
+    "PLKSR_tile": OptionInfo(512, "Tile size for PLKSR upscaler. 0 = no tiling.", gr.Slider, {"minimum": 0, "maximum": 2048, "step": 64}),
+    "PLKSR_tile_overlap": OptionInfo(32, "Tile overlap for PLKSR upscaler. Higher values = fewer artifacts but slower processing.", gr.Slider, {"minimum": 0, "maximum": 256, "step": 16}),
     "DAT_tile": OptionInfo(256, "Tile size for DAT upscalers.", gr.Slider, {"minimum": 0, "maximum": 4096, "step": 32}).info("0 = no tiling"),
     "DAT_tile_overlap": OptionInfo(32, "Tile overlap for DAT upscalers.", gr.Slider, {"minimum": 0, "maximum": 2048, "step": 32}).info("Low values = visible seam"),
     "HAT_tile": OptionInfo(256, "Tile size for HAT upscalers.", gr.Slider, {"minimum": 0, "maximum": 4096, "step": 16}).info("0 = no tiling"),
@@ -122,6 +124,7 @@ options_templates.update(options_section(('upscaling', "Upscaling", "postprocess
     "DAT_tile": OptionInfo(192, "Tile size for DAT upscalers.", gr.Slider, {"minimum": 0, "maximum": 512, "step": 16}).info("0 = no tiling"),
     "upscaler_for_img2img": OptionInfo(None, "Upscaler for img2img", gr.Dropdown, lambda: {"choices": [x.name for x in shared.sd_upscalers]}),
     "set_scale_by_when_changing_upscaler": OptionInfo(False, "Automatically set the Scale by factor based on the name of the selected Upscaler."),
+    "prefer_fp16_upscalers": OptionInfo(False, "Prefer to load Upscaler in half precision").info("increase speed; reduce quality; will try <b>fp16</b>, then <b>bf16</b>, then fall back to <b>fp32</b> if not supported").needs_restart(),
 }))
 
 options_templates.update(options_section(('face-restoration', "Face restoration", "postprocessing"), {
@@ -191,16 +194,23 @@ options_templates.update(options_section(('sd', "Stable Diffusion", "sd"), {
     "sd_checkpoints_keep_in_cpu": OptionInfo(True, "Only keep one model on device").info("will keep models other than the currently used one in RAM rather than VRAM"),
     "sd_checkpoint_cache": OptionInfo(0, "Checkpoints to cache in RAM", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}).info("obsolete; set to 0 and use the two settings above instead"),
     "sd_unet": OptionInfo("Automatic", "SD Unet", gr.Dropdown, lambda: {"choices": shared_items.sd_unet_items()}, refresh=shared_items.refresh_unet_list).info("choose Unet model: Automatic = use one with same filename as checkpoint; None = use Unet from checkpoint"),
+    "sd_text_encoder": OptionInfo("Automatic", "Text Encoder", gr.Dropdown, lambda: {"choices": shared_items.sd_text_encoder_items()}, refresh=shared_items.refresh_text_encoder_list).info("choose Text Encoder model: Automatic = use one with same filename as checkpoint; None = use Text Encoder from checkpoint"),
     "enable_quantization": OptionInfo(False, "Enable quantization in K samplers for sharper and cleaner results. This may change existing seeds").needs_reload_ui(),
     "emphasis": OptionInfo("Original", "Emphasis mode", gr.Radio, lambda: {"choices": [x.name for x in sd_emphasis.options]}, infotext="Emphasis").info("makes it possible to make model to pay (more:1.1) or (less:0.9) attention to text when you use the syntax in prompt; " + sd_emphasis.get_options_descriptions()),
     "enable_batch_seeds": OptionInfo(True, "Make K-diffusion samplers produce same images in a batch as when making a single image"),
     "comma_padding_backtrack": OptionInfo(20, "Prompt word wrap length limit", gr.Slider, {"minimum": 0, "maximum": 74, "step": 1}).info("in tokens - for texts shorter than specified, if they don't fit into 75 token limit, move them to the next 75 token chunk"),
     "sdxl_clip_l_skip": OptionInfo(False, "Clip skip SDXL", gr.Checkbox).info("Enable Clip skip for the secondary clip model in sdxl. Has no effect on SD 1.5 or SD 2.0/2.1."),
     "CLIP_stop_at_last_layers": OptionInfo(1, "Clip skip", gr.Slider, {"minimum": 1, "maximum": 12, "step": 1}, infotext="Clip skip").link("wiki", "https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#clip-skip").info("ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer"),
+    "dynamic_clip_skip_enabled": OptionInfo(False, "Dynamic clip skip ramp", gr.Checkbox).info("Start sampling with a higher clip skip and decrease by 1 each step until reaching 2."),
+    "dynamic_clip_skip_start": OptionInfo(4, "Dynamic clip skip: starting clip skip", gr.Slider, {"minimum": 2, "maximum": 12, "step": 1}).info("Only used when dynamic clip skip ramp is enabled; will clamp to model minimum and 2+."),
+    "dynamic_clip_skip_use_schedule": OptionInfo(False, "Dynamic clip skip: use custom schedule", gr.Checkbox).info("Use a custom per-step clip skip schedule instead of the default ramp."),
+    "dynamic_clip_skip_schedule_values": OptionInfo("", "Dynamic clip skip: schedule (comma-separated)", component_args={"placeholder": "e.g. 9,7,4,3,3,3,2"}).info("Numbers are clip-skip values per step; if steps exceed the list, the last value repeats."),
     "upcast_attn": OptionInfo(False, "Upcast cross attention layer to float32"),
     "randn_source": OptionInfo("GPU", "Random number generator source.", gr.Radio, {"choices": ["GPU", "CPU", "NV"]}, infotext="RNG").info("changes seeds drastically; use CPU to produce the same picture across different videocard vendors; use NV to produce same picture as on NVidia videocards"),
     "tiling": OptionInfo(False, "Tiling", infotext='Tiling').info("produce a tileable picture"),
     "hires_fix_refiner_pass": OptionInfo("second pass", "Hires fix: which pass to enable refiner for", gr.Radio, {"choices": ["first pass", "second pass", "both passes"]}, infotext="Hires refiner"),
+    "cond_stage_model_device_compatibility_check": OptionInfo(False, "Perform device compatibility check for conditional stage model. Enables broader hardware compatibility by falling back to CPU if GPU doesn't support required data types. May improve stability on some systems, but can significantly slow down model loading and potentially impact generation speed.", gr.Checkbox, {"interactive": True}),
+    "reflective_padding_vae_sd": OptionInfo("Disabled", "Enables or disables reflective vae padding, for models/VAEs like MS-LC-EQ-D-VR VAE", gr.Radio, {"choices": ["Disabled", "Enabled"]}, infotext="reflective vae padding"),
 }))
 
 options_templates.update(options_section(('sdxl', "Stable Diffusion XL", "sd"), {
@@ -230,52 +240,6 @@ For img2img, VAE is used to process user's input image before the sampling, and 
     "sd_vae_decode_method": OptionInfo("Full", "VAE type for decode", gr.Radio, {"choices": ["Full", "TAESD"]}, infotext='VAE Decoder').info("method to decode latent to image"),
 }))
 
-options_templates.update(options_section(('model_management_type', "Model Magement Type", "sd"), {
-    "model_management_type": OptionInfo(
-        "Old",
-        "MM Type",
-        gr.Radio,
-        lambda: {"choices": ["Old", "New"]}
-    ).info(
-        """<p>Choose the Model Management Type:</p>
-        <p><strong>A restart of the UI is required for changes to apply effect.</strong></p>
-        <p><strong>Old:</strong> Use the old way to manage models as it was on OG Forge. More stable and no RAM leak, but multiple checkpoints are slower because it doesn't have multiple checkpoints support on VRAM.<br>
-        <p><strong>New:</strong> Use the new way to manage models. It less stable and for now it has a RAM leak issue. Multiple checkpoints work fine to be kept on VRAM.<br>
-        """
-    ),
-}))
-
-options_templates.update(options_section(('sd_sampler_cfg_denoiser', "SD Sampler CFG Denoiser", "sd"), {
-    "sd_sampler_cfg_denoiser": OptionInfo(
-        "reForge",
-        "CFG Denoiser Type",
-        gr.Radio,
-        lambda: {"choices": ["reForge", "reForgeDev"]}
-    ).info(
-        """<p>Choose the CFG Denoiser type:</p>
-        <p><strong>A restart of the UI is required for changes to apply effect.</strong></p>
-        <p><strong>reForge:</strong> Use CFG Denoiser from reForge. It's more compatible with everything and custom samplers.<br>
-        <em>NOTE: This breaks DDIM CFG++ Sampler.</em></p>
-        <p><strong>reForgeDev:</strong> Use CFG Denoiser from reForge Dev variant. This is a WIP with some custom noise changes. Similar to reForge<br>
-        """
-    ),
-}))
-
-options_templates.update(options_section(('sd_processing', "SD Processing", "sd"), {
-    "sd_processing": OptionInfo(
-        "reForge OG",
-        "SD Processing Type",
-        gr.Radio,
-        lambda: {"choices": ["reForge OG", "reForge A1111"]}
-    ).info(
-        """<p>Choose the SD Processing type:</p>
-        <p><strong>A restart of the UI is required for changes to apply effect.</strong></p>
-        <p><strong>reForge OG:</strong> Use SD Processing from OG reForge/Old Forge. Should be more compatible with more extensions.<br>
-        <p><strong>reForge A1111:</strong> Use SD Processing from reForge upstream to A1111, adapted to work fine. It has more features but it can have some unexpected behavior with some extensions<br>
-        """
-    ),
-}))
-
 options_templates.update(options_section(('sd_sampling', "SD Sampling backend for A1111 samplers", "sd"), {
     "sd_sampling": OptionInfo(
         "A1111",
@@ -289,6 +253,11 @@ options_templates.update(options_section(('sd_sampling', "SD Sampling backend fo
         <p><strong>ldm patched (Comfy):</strong> Uses the implementation of ldm_patched.k_diffusion to use on A1111 samplers. It does add more determinism and optimizations to samplers. Uses latest code but can change the results not as expected<br>
         """
     ),
+}))
+
+options_templates.update(options_section(('epsilon_scaling', "Epsilon Scaling", "sd"), {
+    "epsilon_scaling_enabled": OptionInfo(False, "Enable epsilon scaling").info("Scale the guided prediction to mitigate exposure bias during sampling."),
+    "epsilon_scaling_factor": OptionInfo(1.005, "Epsilon scaling factor", gr.Slider, {"minimum": 0.5, "maximum": 1.5, "step": 0.001}).info("Noise scaling multiplier from 'Elucidating the Exposure Bias in Diffusion Models'."),
 }))
 
 options_templates.update(options_section(('img2img', "img2img", "sd"), {
@@ -309,7 +278,7 @@ options_templates.update(options_section(('img2img', "img2img", "sd"), {
 }))
 
 options_templates.update(options_section(('optimizations', "Optimizations", "sd"), {
-    "cross_attention_optimization": OptionInfo("Automatic", "Cross attention optimization", gr.Dropdown, lambda: {"choices": shared_items.cross_attention_optimizations()}),
+    # "cross_attention_optimization": OptionInfo("Automatic", "Cross attention optimization", gr.Dropdown, lambda: {"choices": shared_items.cross_attention_optimizations()}),
     "s_min_uncond": OptionInfo(0.0, "Negative Guidance minimum sigma", gr.Slider, {"minimum": 0.0, "maximum": 15.0, "step": 0.01}, infotext='NGMS').link("PR", "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177").info("skip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster"),
     "s_min_uncond_all": OptionInfo(False, "Negative Guidance minimum sigma all steps", infotext='NGMS all steps').info("By default, NGMS above skips every other step; this makes it skip all steps"),
     "token_merging_ratio": OptionInfo(0.0, "Token merging ratio", gr.Slider, {"minimum": 0.0, "maximum": 0.9, "step": 0.1}, infotext='Token merging ratio').link("PR", "https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9256").info("0=disable, higher=faster"),
@@ -431,6 +400,7 @@ Infotext is what this software calls the text that contains generation parameter
 It is displayed in UI below the image. To use infotext, paste it into the prompt and click the ↙️ paste button.
 """),
     "enable_pnginfo": OptionInfo(True, "Write infotext to metadata of the generated image"),
+    "stealth_pnginfo_opt": OptionInfo("None", "Stealth infotext mode", gr.Radio, {"choices": ["Alpha", "RGB", "None"]}).info("Ignored if infotext is disabled"),
     "save_txt": OptionInfo(False, "Create a text file with infotext next to every generated image"),
 
     "add_model_name_to_info": OptionInfo(True, "Add model name to infotext"),
@@ -574,6 +544,13 @@ options_templates.update(options_section(('sampler-params', "reForge Sampler Par
     "euler_ancestral_group": OptionHTML("<br><h3>Euler Ancestral Settings</h3>"),
     "euler_ancestral_og_eta": OptionInfo(1.0, "Euler Ancestral - eta", gr.Slider, {"minimum": -1.0, "maximum": 2.0, "step": 0.01}, infotext='Euler Ancestral eta'),
     "euler_ancestral_og_s_noise": OptionInfo(1.0, "Euler Ancestral - s_noise", gr.Slider, {"minimum": -1.0, "maximum": 2.0, "step": 0.1}, infotext='Euler Ancestral s_noise'),
+
+    # Euler A2 Parameters
+    "euler_a2_group": OptionHTML("<br><h3>Euler A2 Settings</h3>"),
+    "euler_a2_eta": OptionInfo(1.0, "Euler A2 - eta", gr.Slider, {"minimum": -1.0, "maximum": 2.0, "step": 0.01}, infotext='Euler A2 eta').info('Default = 1.0; noise scale factor used by Euler A2'),
+    "euler_a2_s_noise": OptionInfo(1.0, "Euler A2 - s_noise", gr.Slider, {"minimum": -1.0, "maximum": 2.0, "step": 0.1}, infotext='Euler A2 s_noise').info('Default = 1.0; controls strength of added noise for Euler A2'),
+    "euler_a2_extrapolation": OptionInfo(0.425, "Euler A2 - extrapolation", gr.Slider, {"minimum": 0.0, "maximum": 1.5, "step": 0.05}, infotext='Euler A2 extrapolation').info('Extra push along the averaged path; 0 = average only'),
+
 
     # Heun Parameters
     "heun_group": OptionHTML("<br><h3>Heun Settings</h3>"),
@@ -804,6 +781,41 @@ options_templates.update(options_section(('sampler-params', "reForge Sampler Par
     "dpm2_ancestral_s_noise": OptionInfo(1.0, "DPM2 Ancestral s_noise", gr.Slider, {"minimum": 0.0, "maximum": 2.0, "step": 0.01}),
 
     }))
+
+options_templates.update(options_section(('sampler-params', "Custom Sampler Parameters", "sd"), {
+    # Common sampler parameters
+    "custom_sampler_name": OptionInfo("euler_comfy", "Custom Sampler - Type", gr.Dropdown, {
+        "choices": [
+            "euler_comfy", "euler_ancestral_comfy", "euler_a2", "heun_comfy", 
+            "dpmpp_2s_ancestral_comfy", "dpmpp_sde_comfy", "dpmpp_2m_comfy",
+            "dpmpp_2m_sde_comfy", "dpmpp_3m_sde_comfy", "euler_ancestral_turbo",
+            "dpmpp_2m_turbo", "dpmpp_2m_sde_turbo", "ddpm", "heunpp2",
+            "ipndm", "ipndm_v", "deis", "euler_cfg_pp", "euler_ancestral_cfg_pp",
+            "sample_euler_ancestral_RF", "dpmpp_2s_ancestral_cfg_pp",
+            "sample_dpmpp_2s_ancestral_RF", "dpmpp_2s_ancestral_cfg_pp_dyn",
+            "dpmpp_2s_ancestral_cfg_pp_intern", "dpmpp_sde_cfg_pp",
+            "dpmpp_2m_cfg_pp", "dpmpp_3m_sde_cfg_pp", "dpmpp_2m_dy",
+            "dpmpp_3m_dy", "dpmpp_3m_sde_dy", "euler_dy_cfg_pp",
+            "euler_smea_dy_cfg_pp", "euler_ancestral_dy_cfg_pp",
+            "dpmpp_2m_dy_cfg_pp", "clyb_4m_sde_momentumized",
+            "res_solver", "kohaku_lonyu_yog_cfg_pp"
+        ]
+    }, infotext='Custom sampler type').info('The sampling algorithm to use'),
+
+    # Sampler specific parameters
+    "custom_sampler_eta": OptionInfo(1.0, "Custom Sampler - eta", gr.Slider, {"minimum": -2.0, "maximum": 2.0, "step": 0.01}, infotext='Custom sampler eta').info('Default = 1.0; Controls the scheduler randomness/noise level'),
+    
+    "custom_sampler_s_noise": OptionInfo(1.0, "Custom Sampler - s_noise", gr.Slider, {"minimum": -2.0, "maximum": 3.0, "step": 0.1}, infotext='Custom sampler s_noise').info('Default = 1.0; Controls the noise level during sampling'),
+    
+    "custom_sampler_solver_type": OptionInfo("midpoint", "Custom Sampler - solver type", gr.Dropdown, {"choices": ["midpoint", "heun"]}, infotext='Custom sampler solver type').info('Default = midpoint; The type of solver to use'),
+    
+    "custom_sampler_r": OptionInfo(0.5, "Custom Sampler - r value", gr.Slider, {"minimum": -2.0, "maximum": 2.0, "step": 0.1}, infotext='Custom sampler r').info('Default = 0.5; Controls the step size ratio'),
+
+    # CFG parameters  
+    "custom_cfg_conds": OptionInfo(8.0, "Custom Sampler - CFG scale", gr.Slider, {"minimum": -2.0, "maximum": 100.0, "step": 0.1}, infotext='Custom CFG scale').info('Default = 8.0; Controls the strength of the guidance'),
+    
+    "custom_cfg_cond2_negative": OptionInfo(8.0, "Custom Sampler - Secondary CFG scale", gr.Slider, {"minimum": -2.0, "maximum": 100.0, "step": 0.1}, infotext='Custom secondary CFG scale').info('Default = 8.0; Controls the strength of the secondary guidance'),
+}))
 
 options_templates.update(options_section(('postprocessing', "Postprocessing", "postprocessing"), {
     'postprocessing_enable_in_main_ui': OptionInfo([], "Enable postprocessing operations in txt2img and img2img tabs", ui_components.DropdownMulti, lambda: {"choices": [x.name for x in shared_items.postprocessing_scripts(filter_out_extra_only=True)]}),

@@ -42,12 +42,8 @@ def check_python_version():
     minor = sys.version_info.minor
     micro = sys.version_info.micro
 
-    if is_windows:
-        supported_minors = [10]
-    else:
-        supported_minors = [7, 8, 9, 10, 11]
-
-    if not (major == 3 and minor in supported_minors):
+    # Only show warning if Python version is < 3.7 or >= 3.14
+    if not (major == 3 and 7 <= minor <= 13):
         errors.print_error_explanation(f"""
 INCOMPATIBLE PYTHON VERSION
 
@@ -357,7 +353,6 @@ def requirements_met(requirements_file):
 
     return True
 
-
 def get_cuda_comp_cap():
     """
     Returns float of CUDA Compute Capability using nvidia-smi
@@ -371,27 +366,10 @@ def get_cuda_comp_cap():
         return max(map(float, subprocess.check_output(['nvidia-smi', '--query-gpu=compute_cap', '--format=noheader,csv'], text=True).splitlines()))
     except Exception as _:
         return 0.0
-def early_access_blackwell_wheels():
-    """For Blackwell GPUs, use Early Access PyTorch Wheels provided by Nvidia"""
-    if all([
-            os.environ.get('TORCH_INDEX_URL') is None,
-            sys.version_info.major == 3,
-            sys.version_info.minor in (10, 11, 12),
-            platform.system() == "Windows",
-            get_cuda_comp_cap() >= 10,  # Blackwell
-    ]):
-        base_repo = 'https://huggingface.co/w-e-w/torch-2.6.0-cu128.nv/resolve/main/'
-        ea_whl = {
-            10: f'{base_repo}torch-2.6.0+cu128.nv-cp310-cp310-win_amd64.whl#sha256=fef3de7ce8f4642e405576008f384304ad0e44f7b06cc1aa45e0ab4b6e70490d {base_repo}torchvision-0.20.0a0+cu128.nv-cp310-cp310-win_amd64.whl#sha256=50841254f59f1db750e7348b90a8f4cd6befec217ab53cbb03780490b225abef',
-            11: f'{base_repo}torch-2.6.0+cu128.nv-cp311-cp311-win_amd64.whl#sha256=6665c36e6a7e79e7a2cb42bec190d376be9ca2859732ed29dd5b7b5a612d0d26 {base_repo}torchvision-0.20.0a0+cu128.nv-cp311-cp311-win_amd64.whl#sha256=bbc0ee4938e35fe5a30de3613bfcd2d8ef4eae334cf8d49db860668f0bb47083',
-            12: f'{base_repo}torch-2.6.0+cu128.nv-cp312-cp312-win_amd64.whl#sha256=a3197f72379d34b08c4a4bcf49ea262544a484e8702b8c46cbcd66356c89def6 {base_repo}torchvision-0.20.0a0+cu128.nv-cp312-cp312-win_amd64.whl#sha256=235e7be71ac4e75b0f8e817bae4796d7bac8a67146d2037ab96394f2bdc63e6c'
-        }
-        return f'pip install {ea_whl.get(sys.version_info.minor)}'
-
 
 def prepare_environment():
-    torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu124")
-    torch_command = os.environ.get('TORCH_COMMAND', early_access_blackwell_wheels() or f"pip install torch==2.5.1 torchvision==0.20.1 --extra-index-url {torch_index_url}")
+    torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu128")
+    torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.9.0 torchvision --extra-index-url {torch_index_url}")
     if args.use_ipex:
         if platform.system() == "Windows":
             # The "Nuullll/intel-extension-for-pytorch" wheels were built from IPEX source for Intel Arc GPU: https://github.com/intel/intel-extension-for-pytorch/tree/xpu-main
@@ -415,18 +393,18 @@ def prepare_environment():
     requirements_file = os.environ.get('REQS_FILE', "requirements_versions.txt")
     requirements_file_for_npu = os.environ.get('REQS_FILE_FOR_NPU', "requirements_npu.txt")
 
-    xformers_package = os.environ.get('XFORMERS_PACKAGE', '--index-url https://download.pytorch.org/whl/cu124 xformers==0.0.28.post3')
+    xformers_package = os.environ.get('XFORMERS_PACKAGE', '--index-url https://download.pytorch.org/whl/cu128 xformers')
     clip_package = os.environ.get('CLIP_PACKAGE', "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip")
     openclip_package = os.environ.get('OPENCLIP_PACKAGE', "https://github.com/mlfoundations/open_clip/archive/bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b.zip")
 
     assets_repo = os.environ.get('ASSETS_REPO', "https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git")
-    stable_diffusion_repo = os.environ.get('STABLE_DIFFUSION_REPO', "https://github.com/Stability-AI/stablediffusion.git")
+    stable_diffusion_repo = os.environ.get('STABLE_DIFFUSION_REPO', "https://github.com/joypaul162/Stability-AI-stablediffusion.git")
     stable_diffusion_xl_repo = os.environ.get('STABLE_DIFFUSION_XL_REPO', "https://github.com/Stability-AI/generative-models.git")
     k_diffusion_repo = os.environ.get('K_DIFFUSION_REPO', 'https://github.com/crowsonkb/k-diffusion.git')
     blip_repo = os.environ.get('BLIP_REPO', 'https://github.com/salesforce/BLIP.git')
 
     assets_commit_hash = os.environ.get('ASSETS_COMMIT_HASH', "6f7db241d2f8ba7457bac5ca9753331f0c266917")
-    stable_diffusion_commit_hash = os.environ.get('STABLE_DIFFUSION_COMMIT_HASH', "cf1d67a6fd5ea1aa600c4df58e5b47da45f6bdbf")
+    stable_diffusion_commit_hash = os.environ.get('STABLE_DIFFUSION_COMMIT_HASH', "f16630a927e00098b524d687640719e4eb469b76")
     stable_diffusion_xl_commit_hash = os.environ.get('STABLE_DIFFUSION_XL_COMMIT_HASH', "45c443b316737a4ab6e40413d7794a7f5657c19f")
     k_diffusion_commit_hash = os.environ.get('K_DIFFUSION_COMMIT_HASH', "ab527a9a6d347f364e3d185ba6d714e22d80cb3c")
     blip_commit_hash = os.environ.get('BLIP_COMMIT_HASH', "48211a1594f1321b00f14c9f7a5b4813144b2fb9")
@@ -464,8 +442,24 @@ def prepare_environment():
         )
     startup_timer.record("torch GPU test")
 
+    # Ensure build dependencies are installed before any package that might need them
+    def ensure_build_dependencies():
+        """Ensure essential build tools are available"""
+        if not is_installed("wheel"):
+            run_pip("install wheel", "wheel")
+        # Check setuptools version compatibility
+        try:
+            setuptools_version = run(f'"{python}" -c "import setuptools; print(setuptools.__version__)"', None, None).strip()
+            if setuptools_version >= "70":
+                run_pip("install setuptools==69.5.1", "setuptools")
+        except Exception:
+            # If setuptools check fails, install compatible version
+            run_pip("install setuptools==69.5.1", "setuptools")
+    # Install build dependencies early
+    ensure_build_dependencies()
+
     if not is_installed("clip"):
-        run_pip(f"install {clip_package}", "clip")
+        run_pip(f"install --no-build-isolation {clip_package}", "clip")
         startup_timer.record("install clip")
 
     if not is_installed("open_clip"):

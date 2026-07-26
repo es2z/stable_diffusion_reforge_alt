@@ -320,6 +320,21 @@ class ControlNetForForgeOfficial(scripts.Script):
             return tqdm(iterable) if use_tqdm else iterable
 
         for input_image, input_mask in optional_tqdm(input_list, len(input_list) > 1):
+            # Outpaint fix for ControlNet inpaint.
+            # Outpaint should have the expanded outpaint area masked.
+            if resize_mode == external_code.ResizeMode.OUTER_FIT and "Inpaint" in preprocessor.tags:
+                if input_mask is None:
+                    input_mask = np.zeros_like(input_image)
+                input_mask = crop_and_resize_image(
+                    input_mask,
+                    external_code.ResizeMode.OUTER_FIT, h, w,
+                    fill_border_with_255=True,
+                )
+                input_image = crop_and_resize_image(
+                    input_image,
+                    external_code.ResizeMode.OUTER_FIT, h, w,
+                    fill_border_with_255=False,
+                )
             if unit.pixel_perfect:
                 unit.processor_res = external_code.pixel_perfect_resolution(
                     input_image,
@@ -357,7 +372,7 @@ class ControlNetForForgeOfficial(scripts.Script):
         else:
             hr_option = HiResFixOption.BOTH
 
-        alignment_indices = [i % len(preprocessor_outputs) for i in range(p.batch_size)]
+        alignment_indices = [i % len(preprocessor_outputs) for i in range(p.batch_size * p.n_iter)]
         def attach_extra_result_image(img: np.ndarray, is_high_res: bool = False):
             if (
                 (is_high_res and hr_option.high_res_enabled) or
@@ -457,10 +472,10 @@ class ControlNetForForgeOfficial(scripts.Script):
             return
 
         if is_hr_pass:
-            cond = params.control_cond_for_hr_fix
+            cond = torch.split(params.control_cond_for_hr_fix, p.batch_size)[p.iteration] if isinstance(params.control_cond_for_hr_fix, torch.Tensor) else params.control_cond_for_hr_fix
             mask = params.control_mask_for_hr_fix
         else:
-            cond = params.control_cond
+            cond = torch.split(params.control_cond, p.batch_size)[p.iteration] if isinstance(params.control_cond, torch.Tensor) else params.control_cond
             mask = params.control_mask
 
         kwargs.update(dict(

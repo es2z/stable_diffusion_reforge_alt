@@ -2,7 +2,7 @@ import torch
 from modules import sd_samplers_kdiffusion, sd_samplers_common
 
 from ldm_patched.k_diffusion import sampling as k_diffusion_sampling
-from ldm_patched.modules.samplers import calculate_sigmas_scheduler
+from ldm_patched.modules.samplers import calculate_sigmas
 from modules import shared
 
 
@@ -20,10 +20,15 @@ class AlterSampler(sd_samplers_kdiffusion.KDiffusionSampler):
         self.solver = solver
         self.rtol = rtol
         self.atol = atol
+        self.solver = solver
+        self.rtol = rtol
+        self.atol = atol
         
         sampler_functions = {
             'euler_comfy': k_diffusion_sampling.sample_euler,
             'euler_ancestral_comfy': k_diffusion_sampling.sample_euler_ancestral,
+            'euler_ancestral_comfy_RF': k_diffusion_sampling.sample_euler_ancestral_RF,
+            'euler_a2': k_diffusion_sampling.sample_euler_a2,
             'heun_comfy': k_diffusion_sampling.sample_heun,
             'dpmpp_2s_ancestral_comfy': k_diffusion_sampling.sample_dpmpp_2s_ancestral,
             'dpmpp_sde_comfy': k_diffusion_sampling.sample_dpmpp_sde,
@@ -40,7 +45,6 @@ class AlterSampler(sd_samplers_kdiffusion.KDiffusionSampler):
             'deis': k_diffusion_sampling.sample_deis,
             'euler_cfg_pp': k_diffusion_sampling.sample_euler_cfg_pp,
             'euler_ancestral_cfg_pp': k_diffusion_sampling.sample_euler_ancestral_cfg_pp,
-            'sample_euler_ancestral_RF': k_diffusion_sampling.sample_euler_ancestral_RF,
             'dpmpp_2s_ancestral_cfg_pp': k_diffusion_sampling.sample_dpmpp_2s_ancestral_cfg_pp,
             'sample_dpmpp_2s_ancestral_RF': k_diffusion_sampling.sample_dpmpp_2s_ancestral_RF,
             'dpmpp_2s_ancestral_cfg_pp_dyn': k_diffusion_sampling.sample_dpmpp_2s_ancestral_cfg_pp_dyn,
@@ -63,9 +67,22 @@ class AlterSampler(sd_samplers_kdiffusion.KDiffusionSampler):
             'clyb_4m_sde_momentumized': k_diffusion_sampling.sample_clyb_4m_sde_momentumized,
             'res_solver': k_diffusion_sampling.sample_res_solver,
             'kohaku_lonyu_yog_cfg_pp': k_diffusion_sampling.sample_kohaku_lonyu_yog_cfg_pp,
+            'custom_sampler': k_diffusion_sampling.sample_custom,
             'res_multistep' : k_diffusion_sampling.sample_res_multistep,
             'res_multistep_cfg_pp' : k_diffusion_sampling.sample_res_multistep_cfg_pp,
+            'res_multistep_ancestral' : k_diffusion_sampling.sample_res_multistep_ancestral,
+            'res_multistep_ancestral_cfg_pp' : k_diffusion_sampling.sample_res_multistep_ancestral_cfg_pp,
             'gradient_estimation' : k_diffusion_sampling.sample_gradient_estimation,
+            'gradient_estimation_CFG++' : k_diffusion_sampling.sample_gradient_estimation_cfg_pp,
+            'Kohaku_LoNyu_Yog' : k_diffusion_sampling.sample_Kohaku_LoNyu_Yog,
+            'ER SDE': k_diffusion_sampling.sample_er_sde,
+            'SEEDS_2': k_diffusion_sampling.sample_seeds_2,
+            'SEEDS_3': k_diffusion_sampling.sample_seeds_3,
+            'SA-Solver': k_diffusion_sampling.sample_sa_solver,
+            'SA-Solver-Pece': k_diffusion_sampling.sample_sa_solver_pece,
+            'dpmpp_sde_classic': k_diffusion_sampling.sample_dpmpp_sde_classic,
+            'exp_heun2': k_diffusion_sampling.sample_exp_heun_2_x0,
+            'exp_heun2_sde': k_diffusion_sampling.sample_exp_heun_2_x0_sde,
         }
         
         sampler_function = sampler_functions.get(sampler_name)
@@ -165,18 +182,30 @@ class AlterSampler(sd_samplers_kdiffusion.KDiffusionSampler):
             "Align Your Steps Custom": "ays_custom",
         }
         
-        use_turbo = self.sampler_name.endswith('_turbo') or self.scheduler_name == "Turbo"
-
-        if use_turbo:
-            # Use Turbo scheduler
-            timesteps = torch.flip(torch.arange(1, steps + 1) * float(1000.0 / steps) - 1, (0,)).round().long().clip(0, 999)
-            sigmas = self.unet.model.model_sampling.sigma(timesteps)
-            sigmas = torch.cat([sigmas, sigmas.new_zeros([1])])
-        else:
-            # Use the selected scheduler or default to 'normal'
-            matched_scheduler = forge_schedulers.get(self.scheduler_name, 'normal')
-            sigmas = calculate_sigmas_scheduler(self.unet.model, matched_scheduler, steps, is_sdxl=getattr(self.model, "is_sdxl", False))
+        use_turbo = self.sampler_name.endswith('_turbo') or self.scheduler_name.lower() == "turbo".lower()
+    
+        forge_schedulers_lower = {k.lower(): v for k, v in forge_schedulers.items()}
+        scheduler_key_lower = self.scheduler_name.lower() if self.scheduler_name else ""
         
+        if scheduler_key_lower in forge_schedulers_lower:
+            matched_scheduler = forge_schedulers_lower[scheduler_key_lower]
+        else:
+            # Default to 'normal' if not available
+            matched_scheduler = 'normal'
+
+        try:
+            if use_turbo:
+                # Use Turbo scheduler
+                timesteps = torch.flip(torch.arange(1, steps + 1) * float(1000.0 / steps) - 1, (0,)).round().long().clip(0, 999)
+                sigmas = self.unet.model.model_sampling.sigma(timesteps)
+                sigmas = torch.cat([sigmas, sigmas.new_zeros([1])])
+            else:
+                sigmas = calculate_sigmas(self.unet.model.model_sampling, matched_scheduler, steps, is_sdxl=getattr(self.model, "is_sdxl", False))
+        except Exception as e:
+            print(f"Error calculating sigmas for scheduler {matched_scheduler}: {str(e)}")
+            print("Falling back to normal scheduler")
+            sigmas = calculate_sigmas(self.unet.model.model_sampling, "normal", steps, is_sdxl=getattr(self.model, "is_sdxl", False))
+
         if sigmas is None:
             raise ValueError(f"Invalid scheduler: {self.scheduler_name}")
 
@@ -189,6 +218,9 @@ def build_constructor(sampler_name):
     return constructor
 
 samplers_data_alter = [
+    sd_samplers_common.SamplerData('DPM++ SDE Classic', build_constructor(sampler_name='dpmpp_sde_classic'), ['dpmpp_sde_classic'], {}),
+    sd_samplers_common.SamplerData('ER SDE', build_constructor(sampler_name='ER SDE'), ['ER SDE'], {}),
+    sd_samplers_common.SamplerData('Kohaku_LoNyu_Yog', build_constructor(sampler_name='Kohaku_LoNyu_Yog'), ['Kohaku_LoNyu_Yog'], {}),
     sd_samplers_common.SamplerData('Euler CFG++', build_constructor(sampler_name='euler_cfg_pp'), ['euler_cfg_pp'], {}),
     sd_samplers_common.SamplerData('Euler Ancestral CFG++', build_constructor(sampler_name='euler_ancestral_cfg_pp'), ['euler_ancestral_cfg_pp'], {}),
     sd_samplers_common.SamplerData('DPM++ 2S Ancestral CFG++', build_constructor(sampler_name='dpmpp_2s_ancestral_cfg_pp'), ['dpmpp_2s_ancestral_cfg_pp'], {}),
@@ -201,8 +233,17 @@ samplers_data_alter = [
     sd_samplers_common.SamplerData('DPM++ 2M DY CFG++', build_constructor(sampler_name='dpmpp_2m_dy_cfg_pp'), ['dpmpp_2m_dy_cfg_pp'], {}),
     sd_samplers_common.SamplerData('RES Multistep', build_constructor(sampler_name='res_multistep'), ['res_multistep'], {}),
     sd_samplers_common.SamplerData('RES Multistep CFG++', build_constructor(sampler_name='res_multistep_cfg_pp'), ['res_multistep_cfg_pp'], {}),
+    sd_samplers_common.SamplerData('RES Multistep Ancestral', build_constructor(sampler_name='res_multistep_ancestral'), ['res_multistep_ancestral'], {}),
+    sd_samplers_common.SamplerData('RES Multistep Ancestral CFG++', build_constructor(sampler_name='res_multistep_ancestral_cfg_pp'), ['res_multistep_ancestral_cfg_pp'], {}),
     sd_samplers_common.SamplerData('Gradient Estimation', build_constructor(sampler_name='gradient_estimation'), ['gradient_estimation'], {}),
+    sd_samplers_common.SamplerData('Gradient Estimation CFG++', build_constructor(sampler_name='gradient_estimation_CFG++'), ['gradient_estimation_CFG++'], {}),
+    sd_samplers_common.SamplerData('SEEDS 2 DP', build_constructor(sampler_name='SEEDS_2'), ['SEEDS_2'], {}),
+    sd_samplers_common.SamplerData('SEEDS 3 DP', build_constructor(sampler_name='SEEDS_3'), ['SEEDS_3'], {}),
+    sd_samplers_common.SamplerData('SA-Solver', build_constructor(sampler_name='SA-Solver'), ['SA-Solver'], {}),
+    sd_samplers_common.SamplerData('SA-Solver-Pece', build_constructor(sampler_name='SA-Solver-Pece'), ['SA-Solver-Pece'], {}),
     # sd_samplers_common.SamplerData('Kohaku_LoNyu_Yog CFG++', build_constructor(sampler_name='kohaku_lonyu_yog_cfg_pp'), ['kohaku_lonyu_yog_cfg_pp'], {}),
+    sd_samplers_common.SamplerData('EXP Heun 2 x0', build_constructor(sampler_name='exp_heun2'), ['exp_heun2'], {}),
+    sd_samplers_common.SamplerData('EXP Heun 2 x0 SDE', build_constructor(sampler_name='exp_heun2_sde'), ['exp_heun2_sde'], {}),
     sd_samplers_common.SamplerData('DPM++ 2M DY', build_constructor(sampler_name='dpmpp_2m_dy'), ['dpmpp_2m_dy'], {}),
     sd_samplers_common.SamplerData('DPM++ 3M DY', build_constructor(sampler_name='dpmpp_3m_dy'), ['dpmpp_3m_dy'], {}),
     sd_samplers_common.SamplerData('DPM++ 3M SDE DY', build_constructor(sampler_name='dpmpp_3m_sde_dy'), ['dpmpp_3m_sde_dy'], {}),
@@ -222,8 +263,11 @@ samplers_data_alter = [
     sd_samplers_common.SamplerData('DPM++ 2M SDE Turbo', build_constructor(sampler_name='dpmpp_2m_sde_turbo'), ['dpmpp_2m_sde_turbo'], {}),
     sd_samplers_common.SamplerData('Euler Comfy', build_constructor(sampler_name='euler_comfy'), ['euler_comfy'], {}),
     sd_samplers_common.SamplerData('Euler A Comfy', build_constructor(sampler_name='euler_ancestral_comfy'), ['euler_ancestral_comfy'], {}),
+    sd_samplers_common.SamplerData('Euler A Comfy RF', build_constructor(sampler_name='euler_ancestral_comfy_RF'), ['euler_ancestral_comfy_RF'], {}),
+    sd_samplers_common.SamplerData('Euler A2', build_constructor(sampler_name='euler_a2'), ['euler_a2'], {}),
     sd_samplers_common.SamplerData('Heun Comfy', build_constructor(sampler_name='heun_comfy'), ['heun_comfy'], {}),
     sd_samplers_common.SamplerData('DPM++ 2S Ancestral Comfy', build_constructor(sampler_name='dpmpp_2s_ancestral_comfy'), ['dpmpp_2s_ancestral_comfy'], {}),
+    sd_samplers_common.SamplerData('DPM++ 2S Ancestral Comfy RF', build_constructor(sampler_name='sample_dpmpp_2s_ancestral_RF'), ['sample_dpmpp_2s_ancestral_RF'], {}),
     sd_samplers_common.SamplerData('DPM++ SDE Comfy', build_constructor(sampler_name='dpmpp_sde_comfy'), ['dpmpp_sde_comfy'], {}),
     sd_samplers_common.SamplerData('DPM++ 2M Comfy', build_constructor(sampler_name='dpmpp_2m_comfy'), ['dpmpp_2m_comfy'], {}),
     sd_samplers_common.SamplerData('DPM++ 2M SDE Comfy', build_constructor(sampler_name='dpmpp_2m_sde_comfy'), ['dpmpp_2m_sde_comfy'], {}),
@@ -231,6 +275,5 @@ samplers_data_alter = [
     # sd_samplers_common.SamplerData('CLYB 4M SDE Momentumized', build_constructor(sampler_name='clyb_4m_sde_momentumized'), ['clyb_4m_sde_momentumized'], {}), 
     sd_samplers_common.SamplerData('DPM++ 2S Ancestral CFG++ Dyn', build_constructor(sampler_name='dpmpp_2s_ancestral_cfg_pp_dyn'), ['dpmpp_2s_ancestral_cfg_pp_dyn'], {}),
     sd_samplers_common.SamplerData('DPM++ 2S Ancestral CFG++ Intern', build_constructor(sampler_name='dpmpp_2s_ancestral_cfg_pp_intern'), ['dpmpp_2s_ancestral_cfg_pp_intern'], {}),
-    #sd_samplers_common.SamplerData('Euler A RF', build_constructor(sampler_name='sample_euler_ancestral_RF'), ['sample_euler_ancestral_RF'], {}),
-    # sd_samplers_common.SamplerData('DPM++ 2S Ancestral RF', build_constructor(sampler_name='sample_dpmpp_2s_ancestral_RF'), ['sample_dpmpp_2s_ancestral_RF'], {}),
+    sd_samplers_common.SamplerData('Custom Sampler', build_constructor(sampler_name='custom_sampler'), ['custom_sampler'], {}),
 ]
