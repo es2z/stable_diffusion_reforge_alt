@@ -185,11 +185,20 @@ def reload_model_for_text_encoder_change():
     # Force model reload by clearing any cached state and reloading
     return sd_models.reload_model_weights(forced_reload=True)
 
+
+def configure_svt_logging():
+    from modules import shared
+
+    if shared.opts.avif_suppress_svt_logs:
+        os.environ["SVT_LOG"] = "0"
+
+
 def configure_opts_onchange():
     from modules import shared, sd_models, sd_vae, ui_tempdir, sd_hijack
     from modules.call_queue import wrap_queued_call
     from modules_forge import main_thread
 
+    shared.opts.onchange("avif_suppress_svt_logs", configure_svt_logging)
     shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: main_thread.run_and_wait_result(sd_models.reload_model_weights)), call=False)
     shared.opts.onchange("sd_vae", wrap_queued_call(lambda: main_thread.run_and_wait_result(sd_vae.reload_vae_weights)), call=False)
     shared.opts.onchange("sd_vae_overrides_per_model_preferences", wrap_queued_call(lambda: main_thread.run_and_wait_result(sd_vae.reload_vae_weights)), call=False)

@@ -649,7 +649,20 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         else:
             exif_bytes = None
 
-        image.save(filename,format=image_format, quality=opts.jpeg_quality, exif=exif_bytes)
+        # The Windows SVT build bundled with pillow-avif-plugin 1.6.0 is affected
+        # by an MSVC SIMD inlining bug. Restrict it to AVX until that wheel is fixed.
+        avif_advanced_options = {"asm": "8"} if os.name == "nt" and opts.avif_encoder == "svt" else None
+
+        image.save(
+            filename,
+            format=image_format,
+            quality=opts.jpeg_quality,
+            codec=opts.avif_encoder,
+            speed=opts.avif_speed,
+            subsampling="4:2:0",
+            advanced=avif_advanced_options,
+            exif=exif_bytes,
+        )
     elif extension.lower() == ".gif":
         image.save(filename, format=image_format, comment=geninfo)
     else:
