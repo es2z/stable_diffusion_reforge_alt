@@ -8,23 +8,26 @@ import pytest
 def test_save_images_parallel_uses_one_worker_per_request(monkeypatch):
     from modules import images
 
-    request_count = 8
-    barrier = threading.Barrier(request_count)
-    worker_ids = set()
+    test_batch_size = 8
+    barriers = [threading.Barrier(test_batch_size), threading.Barrier(test_batch_size)]
+    worker_ids = [set(), set()]
     worker_ids_lock = threading.Lock()
 
     def fake_save_image(**request):
         with worker_ids_lock:
-            worker_ids.add(threading.get_ident())
-        barrier.wait(timeout=5)
+            worker_ids[request["batch"]].add(threading.get_ident())
+        barriers[request["batch"]].wait(timeout=5)
         return request["index"]
 
     monkeypatch.setattr(images, "save_image", fake_save_image)
 
-    results = images.save_images_parallel([{"index": index} for index in range(request_count)])
+    first_results = images.save_images_parallel([{"batch": 0, "index": index} for index in range(test_batch_size)])
+    second_results = images.save_images_parallel([{"batch": 1, "index": index} for index in range(test_batch_size)])
 
-    assert results == list(range(request_count))
-    assert len(worker_ids) == request_count
+    assert first_results == list(range(test_batch_size))
+    assert second_results == list(range(test_batch_size))
+    assert len(worker_ids[0]) == test_batch_size
+    assert worker_ids[1] == worker_ids[0]
 
 
 @pytest.mark.usefixtures("initialize")

@@ -32,6 +32,9 @@ LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.L
 
 _sequence_number_lock = threading.Lock()
 _next_sequence_numbers = {}
+_parallel_save_executor_lock = threading.Lock()
+_parallel_save_executor = None
+_parallel_save_executor_capacity = 0
 
 
 def get_font(fontsize: int):
@@ -841,17 +844,37 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
     return fullfn, txt_fullfn
 
 
+def _submit_parallel_save_requests(save_requests):
+    """Submit saves to a lazily-created pool that grows when a larger batch arrives."""
+    global _parallel_save_executor, _parallel_save_executor_capacity
+
+    required_workers = len(save_requests)
+    previous_executor = None
+
+    with _parallel_save_executor_lock:
+        if required_workers > _parallel_save_executor_capacity:
+            previous_executor = _parallel_save_executor
+            _parallel_save_executor_capacity = max(required_workers, os.cpu_count() or 1)
+            _parallel_save_executor = ThreadPoolExecutor(max_workers=_parallel_save_executor_capacity, thread_name_prefix="image-save")
+
+        futures = [_parallel_save_executor.submit(save_image, **request) for request in save_requests]
+
+    if previous_executor is not None:
+        previous_executor.shutdown(wait=False)
+
+    return futures
+
+
 def save_images_parallel(save_requests):
-    """Save a batch of images concurrently, using one worker per request."""
+    """Save a batch concurrently while reusing worker threads between batches."""
     if not save_requests:
         return []
 
     if len(save_requests) == 1:
         return [save_image(**save_requests[0])]
 
-    with ThreadPoolExecutor(max_workers=len(save_requests), thread_name_prefix="image-save") as executor:
-        futures = [executor.submit(save_image, **request) for request in save_requests]
-        return [future.result() for future in futures]
+    futures = _submit_parallel_save_requests(save_requests)
+    return [future.result() for future in futures]
 
 
 IGNORED_INFO_KEYS = {
