@@ -6,7 +6,10 @@ import pytz
 import io
 import math
 import os
+import threading
+import uuid
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 import re
 
 import numpy as np
@@ -26,6 +29,9 @@ from modules.paths_internal import roboto_ttf_file
 from modules.shared import opts
 
 LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+
+_sequence_number_lock = threading.Lock()
+_next_sequence_numbers = {}
 
 
 def get_font(fontsize: int):
@@ -577,6 +583,19 @@ def get_next_sequence_number(path, basename):
     return result + 1
 
 
+def get_next_sequence_number_threadsafe(path, basename):
+    """Return a sequence number that is unique among concurrent image saves."""
+    key = (os.path.normcase(os.path.abspath(path)), basename)
+
+    with _sequence_number_lock:
+        result = _next_sequence_numbers.get(key)
+        if result is None:
+            result = get_next_sequence_number(path, basename)
+        _next_sequence_numbers[key] = result + 1
+
+    return result
+
+
 def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_pnginfo=None, pnginfo_section_name='parameters'):
     """
     Saves image to filename, including geninfo as text information for generation info.
@@ -734,7 +753,7 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
             file_decoration = f"-{file_decoration}"
 
         if add_number:
-            basecount = get_next_sequence_number(path, basename)
+            basecount = get_next_sequence_number_threadsafe(path, basename)
             fullfn = None
             for i in range(500):
                 fn = f"{basecount + i:05}" if basename == '' else f"{basename}-{basecount + i:04}"
@@ -764,17 +783,21 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
         """
         save image with .tmp extension to avoid race condition when another process detects new image in the directory
         """
-        temp_file_path = f"{filename_without_extension}.tmp"
+        temp_file_path = os.path.join(os.path.dirname(filename_without_extension), f".{uuid.uuid4().hex}.tmp")
 
-        save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name)
+        try:
+            save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name)
 
-        filename = filename_without_extension + extension
-        if shared.opts.save_images_replace_action != "Replace":
-            n = 0
-            while os.path.exists(filename):
-                n += 1
-                filename = f"{filename_without_extension}-{n}{extension}"
-        os.replace(temp_file_path, filename)
+            filename = filename_without_extension + extension
+            if shared.opts.save_images_replace_action != "Replace":
+                n = 0
+                while os.path.exists(filename):
+                    n += 1
+                    filename = f"{filename_without_extension}-{n}{extension}"
+            os.replace(temp_file_path, filename)
+        finally:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
     fullfn_without_extension, extension = os.path.splitext(params.filename)
     if hasattr(os, 'statvfs'):
@@ -816,6 +839,19 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
     script_callbacks.image_saved_callback(params)
 
     return fullfn, txt_fullfn
+
+
+def save_images_parallel(save_requests):
+    """Save a batch of images concurrently, using one worker per request."""
+    if not save_requests:
+        return []
+
+    if len(save_requests) == 1:
+        return [save_image(**save_requests[0])]
+
+    with ThreadPoolExecutor(max_workers=len(save_requests), thread_name_prefix="image-save") as executor:
+        futures = [executor.submit(save_image, **request) for request in save_requests]
+        return [future.result() for future in futures]
 
 
 IGNORED_INFO_KEYS = {

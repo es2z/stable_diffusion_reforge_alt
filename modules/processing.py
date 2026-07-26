@@ -1,5 +1,6 @@
 from __future__ import annotations
 from modules.shared import opts
+import copy
 import json
 import logging
 import math
@@ -1141,16 +1142,32 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     return create_infotext(p, clean_prompts, p.seeds, p.subseeds, use_main_prompt=False, index=index, all_negative_prompts=clean_negative_prompts)
 
             save_samples = p.save_samples()
+            batch_save_requests = []
 
             for i, x_sample in enumerate(x_samples_ddim):
                 p.batch_index = i
+
+                def queue_image_save(image_to_save, suffix=""):
+                    processing_snapshot = copy.copy(p)
+                    processing_snapshot.batch_index = i
+                    batch_save_requests.append({
+                        "image": image_to_save,
+                        "path": p.outpath_samples,
+                        "basename": "",
+                        "seed": p.seeds[i],
+                        "prompt": p.prompts[i],
+                        "extension": opts.samples_format,
+                        "info": infotext(i),
+                        "p": processing_snapshot,
+                        "suffix": suffix,
+                    })
 
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
                 x_sample = x_sample.astype(np.uint8)
 
                 if p.restore_faces:
                     if save_samples and opts.save_images_before_face_restoration:
-                        images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
+                        queue_image_save(Image.fromarray(x_sample), suffix="-before-face-restoration")
 
                     devices.torch_gc()
 
@@ -1181,7 +1198,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if p.color_corrections is not None and i < len(p.color_corrections):
                     if save_samples and opts.save_images_before_color_correction:
                         image_without_cc, _ = apply_overlay(image, p.paste_to, overlay_image)
-                        images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
+                        queue_image_save(image_without_cc, suffix="-before-color-correction")
                     image = apply_color_correction(p.color_corrections[i], image)
 
                 # If the intention is to show the output from the model
@@ -1198,7 +1215,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     image = pp.image
 
                 if save_samples:
-                    images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    queue_image_save(image)
 
                 text = infotext(i)
                 infotexts.append(text)
@@ -1210,16 +1227,18 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     if opts.return_mask or opts.save_mask:
                         image_mask = mask_for_overlay.convert('RGB')
                         if save_samples and opts.save_mask:
-                            images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+                            queue_image_save(image_mask, suffix="-mask")
                         if opts.return_mask:
                             output_images.append(image_mask)
 
                     if opts.return_mask_composite or opts.save_mask_composite:
                         image_mask_composite = Image.composite(original_denoised_image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
                         if save_samples and opts.save_mask_composite:
-                            images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+                            queue_image_save(image_mask_composite, suffix="-mask-composite")
                         if opts.return_mask_composite:
                             output_images.append(image_mask_composite)
+
+            images.save_images_parallel(batch_save_requests)
 
             del x_samples_ddim
 
