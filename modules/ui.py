@@ -448,7 +448,6 @@ def create_ui():
 
             toprow.prompt.submit(**txt2img_args)
             toprow.submit.click(**txt2img_args)
-            create_generation_queue_slots("txt2img", txt2img_args)
 
             output_panel.button_upscale.click(
                 fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale, extra_outputs=[None, '', '']),
@@ -502,7 +501,6 @@ def create_ui():
             parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
                 paste_button=toprow.paste, tabname="txt2img", source_text_component=toprow.prompt, source_image_component=None,
             ))
-            ui_extra_networks.create_paste_from_preview("txt2img")
 
             steps = scripts.scripts_txt2img.script('Sampler').steps
 
@@ -521,6 +519,11 @@ def create_ui():
             toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
             toprow.token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
             toprow.negative_token_button.click(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+
+        # Hidden components go here, outside the row of the Generation tab: that row lays out its
+        # first and last child as the two resizable columns.
+        create_generation_queue_slots("txt2img", txt2img_args)
+        ui_extra_networks.create_paste_from_preview("txt2img")
 
         extra_networks_ui = ui_extra_networks.create_ui(txt2img_interface, [txt2img_generation_tab], 'txt2img')
         ui_extra_networks.setup_ui(extra_networks_ui, output_panel.gallery)
@@ -819,7 +822,6 @@ def create_ui():
 
             toprow.prompt.submit(**img2img_args)
             toprow.submit.click(**img2img_args)
-            create_generation_queue_slots("img2img", img2img_args)
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('img2img')}", inputs=None, outputs=None, show_progress=False)
 
@@ -883,9 +885,12 @@ def create_ui():
             parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
                 paste_button=toprow.paste, tabname="img2img", source_text_component=toprow.prompt, source_image_component=None,
             ))
-            ui_extra_networks.create_paste_from_preview("img2img")
 
         extra_networks_ui_img2img = ui_extra_networks.create_ui(img2img_interface, [img2img_generation_tab], 'img2img')
+        # outside the row of the Generation tab, see txt2img
+        create_generation_queue_slots("img2img", img2img_args)
+        ui_extra_networks.create_paste_from_preview("img2img")
+
         ui_extra_networks.setup_ui(extra_networks_ui_img2img, output_panel.gallery)
 
         extra_tabs.__exit__()
