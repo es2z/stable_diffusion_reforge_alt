@@ -168,6 +168,14 @@ var OutputBrowser = (function () {
 
     // ---------------------------------------------------------------- grid
 
+    /** Removes a row; thumbnails in it that are still loading are cancelled, they are not needed anymore. */
+    function discardRow(row) {
+        row.querySelectorAll("img").forEach(function (img) {
+            if (!img.complete) img.removeAttribute("src");
+        });
+        row.remove();
+    }
+
     function schedule() {
         if (frame !== null) return;
         frame = requestAnimationFrame(function () {
@@ -224,9 +232,7 @@ var OutputBrowser = (function () {
         els.canvas.style.height = rowCount * tile + "px";
 
         if (layout.stale) {
-            rows.forEach(function (row) {
-                row.remove();
-            });
+            rows.forEach(discardRow);
             rows.clear();
             layout.stale = false;
         }
@@ -242,7 +248,7 @@ var OutputBrowser = (function () {
 
         rows.forEach(function (row, index) {
             if (index < first || index > last) {
-                row.remove();
+                discardRow(row);
                 rows.delete(index);
             }
         });
