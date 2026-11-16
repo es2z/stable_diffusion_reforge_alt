@@ -44,13 +44,28 @@ class PasteField(tuple):
         self.function = target if callable(target) else None
 
 
+class UndoablePasteBinding:
+    """A paste into a tab's fields that can be taken back: see connect_undoable_paste."""
+
+    def __init__(self, tabname, apply_button, undo_button, source_component, status_component, snapshot_component, read_infotext):
+        self.tabname = tabname
+        self.apply_button = apply_button
+        self.undo_button = undo_button
+        self.source_component = source_component
+        self.status_component = status_component
+        self.snapshot_component = snapshot_component
+        self.read_infotext = read_infotext
+
+
 paste_fields: dict[str, dict] = {}
 registered_param_bindings: list[ParamBinding] = []
+registered_undoable_paste_bindings: list[UndoablePasteBinding] = []
 
 
 def reset():
     paste_fields.clear()
     registered_param_bindings.clear()
+    registered_undoable_paste_bindings.clear()
 
 
 def quote(text):
@@ -136,6 +151,10 @@ def register_paste_params_button(binding: ParamBinding):
     registered_param_bindings.append(binding)
 
 
+def register_undoable_paste(binding: UndoablePasteBinding):
+    registered_undoable_paste_bindings.append(binding)
+
+
 def connect_paste_params_buttons():
     for binding in registered_param_bindings:
         if binding.tabname not in paste_fields:
@@ -183,6 +202,10 @@ def connect_paste_params_buttons():
             outputs=None,
             show_progress=False,
         )
+
+    for undoable_binding in registered_undoable_paste_bindings:
+        if undoable_binding.tabname in paste_fields and paste_fields[undoable_binding.tabname]["fields"] is not None:
+            connect_undoable_paste(undoable_binding)
 
 
 def send_image_and_dimensions(x):
@@ -479,6 +502,128 @@ def get_override_settings(params, *, skip_fields=None):
     return res
 
 
+def paste_updates(prompt, paste_fields):
+    """Turns infotext into one update per paste field."""
+    params = parse_generation_parameters(prompt)
+    script_callbacks.infotext_pasted_callback(prompt, params)
+    res = []
+
+    for output, key in paste_fields:
+        if callable(key):
+            try:
+                v = key(params)
+            except Exception:
+                errors.report(f"Error executing {key}", exc_info=True)
+                v = None
+        else:
+            v = params.get(key, None)
+
+        if v is None:
+            res.append(gr.update())
+        elif isinstance(v, type_of_gr_update):
+            res.append(v)
+        else:
+            try:
+                valtype = type(output.value)
+
+                if valtype == bool and v == "False":
+                    val = False
+                elif valtype == int:
+                    val = float(v)
+                else:
+                    val = valtype(v)
+
+                res.append(gr.update(value=val))
+            except Exception:
+                res.append(gr.update())
+
+    return res
+
+
+def with_override_settings_field(paste_fields, override_settings_component):
+    """Adds the field that shows settings from the infotext which have no component of their own."""
+    if override_settings_component is None:
+        return paste_fields
+
+    already_handled_fields = {key: 1 for _, key in paste_fields}
+
+    def paste_settings(params):
+        vals = get_override_settings(params, skip_fields=already_handled_fields)
+
+        vals_pairs = [f"{infotext_text}: {value}" for infotext_text, setting_name, value in vals]
+
+        return gr.Dropdown.update(value=vals_pairs, choices=vals_pairs, visible=bool(vals_pairs))
+
+    return paste_fields + [(override_settings_component, paste_settings)]
+
+
+def connect_undoable_paste(binding: UndoablePasteBinding):
+    """Pastes infotext into the fields of a tab like the paste button does, and lets it be taken back.
+
+    Pressing apply_button reads infotext with binding.read_infotext(value of source_component) and
+    fills the tab's fields. What the fields held before goes into snapshot_component; pressing
+    undo_button puts that back. status_component tells the browser what happened: "applied",
+    "undone", or "" when there was nothing to do.
+    """
+    override_settings_component = paste_fields[binding.tabname]["override_settings_component"]
+    fields = with_override_settings_field(paste_fields[binding.tabname]["fields"], override_settings_component)
+    components = [x[0] for x in fields]
+
+    # some fields are containers that pasting only makes visible; they have no value to remember
+    value_components = [x for x in components if isinstance(x, gr.components.IOComponent)]
+
+    def apply(source, *current_values):
+        nothing = [gr.update() for _ in components]
+
+        try:
+            infotext = binding.read_infotext(source)
+        except Exception as e:
+            errors.display(e, "reading generation parameters to apply")
+            infotext = None
+
+        if not infotext:
+            return [*nothing, gr.update(), ""]
+
+        return [*paste_updates(infotext, fields), list(current_values), "applied"]
+
+    def undo(snapshot):
+        if not snapshot or len(snapshot) != len(value_components):
+            return [*[gr.update() for _ in components], None, ""]
+
+        previous = {id(component): value for component, value in zip(value_components, snapshot)}
+
+        res = []
+        for component in components:
+            if id(component) not in previous:
+                res.append(gr.update())
+                continue
+
+            value = previous[id(component)]
+            if component is override_settings_component:
+                value = value or []
+                res.append(gr.Dropdown.update(value=value, choices=value, visible=bool(value)))
+            else:
+                res.append(gr.update(value=value))
+
+        return [*res, None, "undone"]
+
+    after_js = "function(status){ extraNetworksPasteFinished('" + binding.tabname + "', status); recalculate_prompts_" + binding.tabname + "(); return []; }"
+
+    binding.apply_button.click(
+        fn=apply,
+        inputs=[binding.source_component, *value_components],
+        outputs=[*components, binding.snapshot_component, binding.status_component],
+        show_progress=False,
+    ).then(fn=None, _js=after_js, inputs=[binding.status_component], outputs=[], show_progress=False)
+
+    binding.undo_button.click(
+        fn=undo,
+        inputs=[binding.snapshot_component],
+        outputs=[*components, binding.snapshot_component, binding.status_component],
+        show_progress=False,
+    ).then(fn=None, _js=after_js, inputs=[binding.status_component], outputs=[], show_progress=False)
+
+
 def connect_paste(button, paste_fields, input_comp, override_settings_component, tabname):
     def paste_func(prompt):
         if not prompt and not shared.cmd_opts.hide_ui_dir_config and not shared.cmd_opts.no_prompt_history:
@@ -489,52 +634,9 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
             except OSError:
                 pass
 
-        params = parse_generation_parameters(prompt)
-        script_callbacks.infotext_pasted_callback(prompt, params)
-        res = []
+        return paste_updates(prompt, paste_fields)
 
-        for output, key in paste_fields:
-            if callable(key):
-                try:
-                    v = key(params)
-                except Exception:
-                    errors.report(f"Error executing {key}", exc_info=True)
-                    v = None
-            else:
-                v = params.get(key, None)
-
-            if v is None:
-                res.append(gr.update())
-            elif isinstance(v, type_of_gr_update):
-                res.append(v)
-            else:
-                try:
-                    valtype = type(output.value)
-
-                    if valtype == bool and v == "False":
-                        val = False
-                    elif valtype == int:
-                        val = float(v)
-                    else:
-                        val = valtype(v)
-
-                    res.append(gr.update(value=val))
-                except Exception:
-                    res.append(gr.update())
-
-        return res
-
-    if override_settings_component is not None:
-        already_handled_fields = {key: 1 for _, key in paste_fields}
-
-        def paste_settings(params):
-            vals = get_override_settings(params, skip_fields=already_handled_fields)
-
-            vals_pairs = [f"{infotext_text}: {value}" for infotext_text, setting_name, value in vals]
-
-            return gr.Dropdown.update(value=vals_pairs, choices=vals_pairs, visible=bool(vals_pairs))
-
-        paste_fields = paste_fields + [(override_settings_component, paste_settings)]
+    paste_fields = with_override_settings_field(paste_fields, override_settings_component)
 
     button.click(
         fn=paste_func,

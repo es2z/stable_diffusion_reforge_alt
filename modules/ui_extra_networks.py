@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Union
 from dataclasses import dataclass
 
-from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, ui_extra_networks_stats, errors, extra_networks, util
+from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, ui_extra_networks_stats, errors, extra_networks, util, infotext_utils
 from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
@@ -182,6 +182,29 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0, full: boo
     return Response(content=data, media_type=media_type, headers={**cache_headers})
 
 
+def open_preview_original(source: str):
+    """Finds the original image behind the preview link of a card.
+
+    Returns (filename, None) for a preview file, (None, image) for a cover image embedded into a model.
+    """
+    parsed = urllib.parse.urlparse(source or "")
+    query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+    route = parsed.path.rsplit("/", 1)[-1]
+
+    if route == "thumb":
+        filename = query.get("filename", "")
+        check_preview_file(filename)
+        return filename, None
+
+    if route == "cover-images":
+        _, data = get_cover_image(query.get("page", ""), query.get("item", ""), int(query.get("index", 0)))
+        image = Image.open(BytesIO(data))
+        image.load()
+        return None, image
+
+    raise ValueError(f"not a preview link: {source}")
+
+
 def load_preview_for_pnginfo(source: str):
     """Turns the preview link of a card into a value for PNG Info's image component.
 
@@ -189,31 +212,52 @@ def load_preview_for_pnginfo(source: str):
     passes them on byte for byte, the same as if the user had uploaded them.
     """
     try:
-        parsed = urllib.parse.urlparse(source or "")
-        query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-        route = parsed.path.rsplit("/", 1)[-1]
-
-        if route == "thumb":
-            filename = query.get("filename", "")
-            check_preview_file(filename)
+        filename, image = open_preview_original(source)
+        if filename is not None:
             return filename
 
-        if route == "cover-images":
-            _, data = get_cover_image(query.get("page", ""), query.get("item", ""), int(query.get("index", 0)))
-            image = Image.open(BytesIO(data))
-            image.load()
+        # gradio re-encodes PIL images as PNG and keeps text chunks only; parameters stored in EXIF would get lost
+        geninfo, _ = read_info_from_image(image)
+        if geninfo and not isinstance(image.info.get("parameters"), str):
+            image.info["parameters"] = geninfo
 
-            # gradio re-encodes PIL images as PNG and keeps text chunks only; parameters stored in EXIF would get lost
-            geninfo, _ = read_info_from_image(image)
-            if geninfo and not isinstance(image.info.get("parameters"), str):
-                image.info["parameters"] = geninfo
-
-            return image
-
-        raise ValueError(f"not a preview link: {source}")
+        return image
     except Exception as e:
         errors.display(e, "sending extra network preview to PNG Info")
         return gr.update()
+
+
+def read_preview_infotext(source: str):
+    """Generation parameters of the original image behind the preview link of a card, or None."""
+    filename, image = open_preview_original(source)
+    if filename is not None:
+        with Image.open(filename) as image:
+            geninfo, _ = read_info_from_image(image)
+    else:
+        geninfo, _ = read_info_from_image(image)
+
+    return geninfo
+
+
+def create_paste_from_preview(tabname: str):
+    """Creates the hidden components behind the card button that applies a preview's parameters to the tab.
+
+    Has to be called inside the tab's Blocks, after its paste fields are registered.
+    """
+    source = gr.Textbox(visible=False, label="Extra networks paste source", elem_id=f"{tabname}_extra_networks_paste_source")
+    status = gr.Textbox(visible=False, label="Extra networks paste status", elem_id=f"{tabname}_extra_networks_paste_status")
+    source.do_not_save_to_config = True
+    status.do_not_save_to_config = True
+
+    infotext_utils.register_undoable_paste(infotext_utils.UndoablePasteBinding(
+        tabname=tabname,
+        apply_button=gr.Button("Apply preview parameters", visible=False, elem_id=f"{tabname}_extra_networks_paste_apply"),
+        undo_button=gr.Button("Undo applying preview parameters", visible=False, elem_id=f"{tabname}_extra_networks_paste_undo"),
+        source_component=source,
+        status_component=status,
+        snapshot_component=gr.State(None),
+        read_infotext=read_preview_infotext,
+    ))
 
 
 def get_metadata(page: str = "", item: str = ""):

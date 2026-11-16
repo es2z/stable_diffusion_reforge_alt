@@ -703,6 +703,24 @@ var ExtraNetworksGrid = (function () {
                     send.setAttribute("data-preview", item.preview);
                     imageButtons.appendChild(send);
                 }
+
+                if (
+                    PREVIEW_ROUTES.test(item.preview) &&
+                    gradioApp().getElementById(
+                        tabname + "_extra_networks_paste_apply"
+                    )
+                ) {
+                    var apply = cardButton(
+                        "div",
+                        "apply-params-button",
+                        "Apply the generation parameters of the preview image to this tab (Ctrl+Z to undo)",
+                        "extraNetworksApplyPreviewParams(event, '" +
+                            tabname +
+                            "')"
+                    );
+                    apply.setAttribute("data-preview", item.preview);
+                    imageButtons.appendChild(apply);
+                }
                 card.appendChild(imageButtons);
             }
 
@@ -2109,6 +2127,147 @@ function extraNetworksRefreshSingleCard(page, tabname, name) {
         reloadPage
     );
 }
+
+// ============================================================================
+// Applying the parameters of a preview image, with undo
+// ============================================================================
+
+// tab name -> true while Ctrl+Z would take the last "apply" back
+var extraNetworksPasteUndoArmed = {};
+
+function extraNetworksToast(text, actionLabel, action) {
+    var toast = document.getElementById("extra-networks-toast");
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "extra-networks-toast";
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = text;
+    if (actionLabel) {
+        var button = document.createElement("button");
+        button.textContent = actionLabel;
+        button.addEventListener("click", action);
+        toast.appendChild(button);
+    }
+
+    toast.classList.add("extra-networks-toast--shown");
+    clearTimeout(toast.hideTimer);
+    toast.hideTimer = setTimeout(extraNetworksHideToast, 8000);
+}
+
+function extraNetworksHideToast() {
+    var toast = document.getElementById("extra-networks-toast");
+    if (toast) toast.classList.remove("extra-networks-toast--shown");
+}
+
+/**
+ * Card button: fills the tab's fields from the generation parameters of the card's preview image,
+ * the same as sending that image to the tab from PNG Info.
+ */
+function extraNetworksApplyPreviewParams(event, tabname) {
+    event.stopPropagation();
+
+    var button = event.target.closest(".card-button");
+    var source = gradioApp().querySelector(
+        "#" + tabname + "_extra_networks_paste_source textarea, #" +
+            tabname + "_extra_networks_paste_source input"
+    );
+    var apply = gradioApp().getElementById(
+        tabname + "_extra_networks_paste_apply"
+    );
+    if (!button || !source || !apply) return;
+
+    source.value = button.getAttribute("data-preview");
+    updateInput(source);
+    apply.click();
+}
+
+function extraNetworksUndoPreviewParams(tabname) {
+    var undo = gradioApp().getElementById(
+        tabname + "_extra_networks_paste_undo"
+    );
+    if (!undo || !extraNetworksPasteUndoArmed[tabname]) return;
+
+    extraNetworksPasteUndoArmed[tabname] = false;
+    undo.click();
+}
+
+/**
+ * Called by the server side once an apply or an undo is through.
+ */
+function extraNetworksPasteFinished(tabname, status) {
+    if (status == "applied") {
+        extraNetworksPasteUndoArmed[tabname] = true;
+        extraNetworksToast(
+            "Parameters of the preview image applied. Ctrl+Z takes it back.",
+            "Undo",
+            function () {
+                extraNetworksUndoPreviewParams(tabname);
+            }
+        );
+    } else if (status == "undone") {
+        extraNetworksPasteUndoArmed[tabname] = false;
+        extraNetworksToast("Previous parameters restored.");
+    } else {
+        extraNetworksToast(
+            "The preview image has no generation parameters."
+        );
+    }
+}
+
+function extraNetworksVisibleGenerationTab() {
+    var names = ["txt2img", "img2img"];
+    for (var i = 0; i < names.length; i++) {
+        var tab = gradioApp().getElementById("tab_" + names[i]);
+        if (tab && tab.style.display != "none") return names[i];
+    }
+    return null;
+}
+
+// Ctrl+Z right after applying takes the whole apply back, wherever the focus is.
+window.addEventListener(
+    "keydown",
+    function (event) {
+        if (
+            !(event.ctrlKey || event.metaKey) ||
+            event.shiftKey ||
+            event.altKey ||
+            (event.key != "z" && event.key != "Z")
+        ) {
+            return;
+        }
+
+        var tabname = extraNetworksVisibleGenerationTab();
+        if (!tabname || !extraNetworksPasteUndoArmed[tabname]) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        extraNetworksUndoPreviewParams(tabname);
+    },
+    true
+);
+
+// Once the user changes something by hand, Ctrl+Z belongs to that edit again.
+["input", "change"].forEach(function (type) {
+    window.addEventListener(
+        type,
+        function (event) {
+            if (!event.isTrusted) return;
+
+            ["txt2img", "img2img"].forEach(function (tabname) {
+                if (!extraNetworksPasteUndoArmed[tabname]) return;
+
+                var tab = gradioApp().getElementById("tab_" + tabname);
+                if (tab && tab.contains(event.target)) {
+                    extraNetworksPasteUndoArmed[tabname] = false;
+                    extraNetworksHideToast();
+                }
+            });
+        },
+        true
+    );
+});
 
 /**
  * Switches the main tabs to the one with the given element id, e.g. "tab_pnginfo".
