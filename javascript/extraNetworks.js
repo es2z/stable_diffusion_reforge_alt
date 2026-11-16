@@ -1,679 +1,1044 @@
 /**
- * ExtraNetworks Virtual Scrolling Implementation
+ * Extra Networks cards
  *
- * This implements true virtual scrolling where only visible cards + buffer
- * are rendered in the DOM. Card data is kept in memory and DOM elements
- * are recycled as the user scrolls.
+ * The server does not send cards as HTML. Every page (Lora, Checkpoints, ...) is described by a
+ * list of plain items that is fetched once from ./sd_extra_networks/items and shared by txt2img
+ * and img2img. Each tab has a grid per page which creates DOM nodes only for the rows that are
+ * on screen, and adds/removes whole rows as the user scrolls.
  *
  * Performance characteristics:
- * - Initial render: O(visible cards) instead of O(all cards)
- * - Scroll: O(1) DOM updates per frame
- * - Memory: O(visible cards) DOM nodes + O(all cards) lightweight data
+ * - Load: one small JSON document per page instead of megabytes of HTML per tab
+ * - DOM: O(visible cards), whatever the amount of items
+ * - Scroll: only rows entering or leaving the viewport are touched
+ * - Search and sort: done on the item list in memory
+ *
+ * The cards that are created have the same structure as the ones the server used to send
+ * (html/extra-networks-card.html), so code that works with a card element keeps working. Code that
+ * expects every card to be present in the page has to use ExtraNetworksData instead.
  */
 
 // ============================================================================
-// Virtual Scroll Core Implementation
+// Item data, shared between tabs
 // ============================================================================
 
-var VirtualScrollManager = (function () {
+var ExtraNetworksData = (function () {
     "use strict";
 
-    // Store state for each tab
-    var instances = {};
+    // extra networks tab name ("lora", "textual_inversion", ...) -> state
+    var pages = {};
 
-    // Configuration
-    var CONFIG = {
-        BUFFER_SIZE: 80, // Cards to render above/below viewport
-        SCROLL_THROTTLE: 6, // ~60fps
-        IMAGE_PRELOAD_AHEAD: 400, // How many images to preload ahead
-        DEBOUNCE_RESIZE: 150,
-        MIN_CARDS_FOR_VIRTUAL: 50, // Only virtualize if more than this many cards
-    };
-    // var CONFIG = {
-    //     BUFFER_SIZE: 20,           // Cards to render above/below viewport
-    //     SCROLL_THROTTLE: 16,       // ~60fps
-    //     IMAGE_PRELOAD_AHEAD: 30,   // How many images to preload ahead
-    //     DEBOUNCE_RESIZE: 150,
-    //     MIN_CARDS_FOR_VIRTUAL: 50  // Only virtualize if more than this many cards
-    // };
+    function entry(pageName) {
+        if (!pages[pageName]) {
+            pages[pageName] = {
+                data: null,
+                promise: null,
+                request: 0,
+                listeners: [],
+            };
+        }
+        return pages[pageName];
+    }
+
+    function notify(page, status) {
+        page.listeners.forEach(function (listener) {
+            try {
+                listener({ status: status, data: page.data });
+            } catch (error) {
+                console.error(error);
+            }
+        });
+    }
+
+    function prepareItem(data, item, index) {
+        var description = item.description || "";
+        if (data.description_is_html) {
+            description = description.replace(/<[^>]*>/g, " ");
+        }
+
+        item.index = index;
+        // the same text the search used to collect from the card's elements
+        item.searchText = (item.search_terms || [])
+            .concat([description])
+            .join(" ")
+            .toLowerCase();
+
+        return item;
+    }
+
+    function prepare(data) {
+        data.items.forEach(function (item, index) {
+            prepareItem(data, item, index);
+        });
+
+        return data;
+    }
 
     /**
-     * Card data structure (lightweight, stored in memory)
+     * Replaces one item with a newer description of it; null removes it.
+     * Returns false if the page is not loaded.
      */
-    function CardData(element) {
-        // Extract all data from the original card element
-        this.outerHTML = element.outerHTML;
-        this.name = element.dataset.name || "";
-        this.sortDefault = element.dataset.sortDefault || "";
-        this.sortName = element.dataset.sortName || "";
-        this.sortDateCreated = element.dataset.sortDateCreated || "";
-        this.sortDateModified = element.dataset.sortDateModified || "";
-        this.searchText = "";
-        this.visible = true;
+    function updateItem(pageName, name, item) {
+        var page = entry(pageName);
+        var data = page.data;
+        if (!data) return false;
 
-        // Extract search text
-        var searchTerms = element.querySelectorAll(
-            ".search_terms, .description"
-        );
-        var textParts = [];
-        searchTerms.forEach(function (t) {
-            textParts.push(t.textContent.toLowerCase());
-        });
-        this.searchText = textParts.join(" ");
-
-        // Check if search-only
-        this.searchOnly = !!element.querySelector(".search_only");
-
-        // Extract background image URL for lazy loading
-        var bgMatch = element.getAttribute("style");
-        if (bgMatch) {
-            var urlMatch = bgMatch.match(/url\(['"]?([^'"]+)['"]?\)/);
-            if (urlMatch) {
-                this.backgroundUrl = urlMatch[1];
+        var position = -1;
+        for (var i = 0; i < data.items.length; i++) {
+            if (data.items[i].name === name) {
+                position = i;
+                break;
             }
         }
 
-        // Store the inner content without background for recycling
-        this.style = element.getAttribute("style") || "";
-        this.className = element.className;
-        this.onclick = element.getAttribute("onclick") || "";
-        this.innerHTML = element.innerHTML;
+        if (!item) {
+            if (position !== -1) data.items.splice(position, 1);
+        } else if (position !== -1) {
+            var old = data.items[position];
+            // a single item is listed without its place in the list; it stays where it was
+            item.sort_keys = item.sort_keys || {};
+            if (
+                item.sort_keys.default === undefined ||
+                item.sort_keys.default === null
+            ) {
+                item.sort_keys.default = (old.sort_keys || {}).default;
+            }
+            data.items[position] = prepareItem(data, item, old.index);
+        } else {
+            data.items.push(prepareItem(data, item, data.items.length));
+        }
+
+        notify(page, "ready");
+        return true;
+    }
+
+    function load(pageName, force) {
+        var page = entry(pageName);
+        if (page.promise && !force) {
+            return page.promise;
+        }
+
+        var request = ++page.request;
+        notify(page, "loading");
+
+        page.promise = fetch(
+            "./sd_extra_networks/items?page=" + encodeURIComponent(pageName),
+            { cache: "no-store" }
+        )
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error("HTTP " + response.status);
+                }
+                return response.json();
+            })
+            .then(function (data) {
+                if (request !== page.request) {
+                    return page.promise; // a newer request is on its way
+                }
+                page.data = prepare(data);
+                notify(page, "ready");
+                return page.data;
+            })
+            .catch(function (error) {
+                console.error(
+                    "Extra Networks: could not load items for",
+                    pageName,
+                    error
+                );
+                if (request === page.request) {
+                    page.promise = null;
+                    notify(page, "error");
+                }
+                return page.data;
+            });
+
+        return page.promise;
+    }
+
+    return {
+        /** Loads the items of a page; all tabs share the request and its result. */
+        load: load,
+
+        /** Asks the server for the items of every known page again. */
+        reloadAll: function () {
+            return Promise.all(
+                Object.keys(pages).map(function (pageName) {
+                    return load(pageName, true);
+                })
+            );
+        },
+
+        updateItem: updateItem,
+
+        /** Returns what the server sent for the page, or null while it is not loaded. */
+        get: function (pageName) {
+            return entry(pageName).data;
+        },
+
+        /** Returns the item with the given name, or null. */
+        getItem: function (pageName, name) {
+            var data = entry(pageName).data;
+            if (!data) return null;
+
+            for (var i = 0; i < data.items.length; i++) {
+                if (data.items[i].name === name) return data.items[i];
+            }
+            return null;
+        },
+
+        /** Calls listener({status: "loading" | "ready" | "error", data}) whenever the page's state changes. */
+        subscribe: function (pageName, listener) {
+            var page = entry(pageName);
+            page.listeners.push(listener);
+            if (page.data) {
+                listener({ status: "ready", data: page.data });
+            }
+        },
+    };
+})();
+
+// ============================================================================
+// Virtual grid of cards
+// ============================================================================
+
+var ExtraNetworksGrid = (function () {
+    "use strict";
+
+    var CONFIG = {
+        // Rows kept ready above and below the visible ones.
+        OVERSCAN_ROWS: 2,
+    };
+
+    var instances = {};
+
+    var PREVIEW_ROUTES = /(^|\/)sd_extra_networks\/(thumb|cover-images)\?/;
+
+    function el(tag, className) {
+        var element = document.createElement(tag);
+        if (className) element.className = className;
+        return element;
     }
 
     /**
-     * Virtual Scroll Instance
+     * Removes a row. Previews in it that are still loading are cancelled first: otherwise the
+     * server goes on preparing images for rows that were only scrolled past, and the ones that
+     * are in view now have to wait for them.
      */
-    function VirtualScroll(tabname_full) {
-        this.tabname_full = tabname_full;
-        this.container = null;
-        this.scrollContainer = null;
-        this.contentWrapper = null;
-
-        this.allCards = []; // All CardData objects
-        this.filteredCards = []; // Currently visible (filtered) cards
-        this.renderedRange = { start: 0, end: 0 };
-
-        this.cardHeight = 0;
-        this.cardWidth = 0;
-        this.cardsPerRow = 1;
-        this.rowHeight = 0;
-
-        this.scrollTop = 0;
-        this.containerHeight = 0;
-
-        this.isInitialized = false;
-        this.scrollRAF = null;
-        this.resizeTimer = null;
-
-        // Image preloader
-        this.imageCache = new Set();
-        this.preloadQueue = [];
-        this.isPreloading = false;
+    function discardRow(row) {
+        row.querySelectorAll("img.preview").forEach(function (img) {
+            if (!img.complete) {
+                img.onerror = null;
+                img.removeAttribute("src");
+            }
+        });
+        row.remove();
     }
 
-    VirtualScroll.prototype = {
-        /**
-         * Initialize virtual scrolling for a container
-         */
+    function cardButton(tag, className, title, onclick) {
+        var button = el(tag, className + " card-button");
+        button.title = title;
+        if (onclick) button.setAttribute("onclick", onclick);
+        return button;
+    }
 
-        init: function () {
+    /** Link to the original image behind a preview link, which itself gives a thumbnail. */
+    function originalImageUrl(preview) {
+        if (!PREVIEW_ROUTES.test(preview)) return preview;
+        return preview + "&full=1";
+    }
+
+    function compareBy(sortKey) {
+        return function (a, b) {
+            var av = a.sort_keys ? a.sort_keys[sortKey] : undefined;
+            var bv = b.sort_keys ? b.sort_keys[sortKey] : undefined;
+            if (av === undefined || av === null) av = "";
+            if (bv === undefined || bv === null) bv = "";
+
+            var result;
+            if (av !== "" && bv !== "" && !isNaN(av) && !isNaN(bv)) {
+                result = Number(av) - Number(bv);
+            } else {
+                av = String(av);
+                bv = String(bv);
+                result = av < bv ? -1 : av > bv ? 1 : 0;
+            }
+
+            return result || a.index - b.index;
+        };
+    }
+
+    function Grid(tabname, pageName) {
+        this.tabname = tabname;
+        this.pageName = pageName;
+        this.tabnameFull = tabname + "_" + pageName;
+
+        this.data = null;
+        this.visibleItems = []; // sorted and filtered
+        this.view = {
+            term: "",
+            useRegex: false,
+            sortKey: "default",
+            descending: false,
+        };
+        this.viewKey = null;
+
+        this.scroller = null; // #<tab>_<page>_cards, the element that scrolls
+        this.canvas = null; // has the height of all rows together
+        this.status = null; // "Loading...", "Nothing here", ...
+        this.rows = new Map(); // row index -> element; only rows near the viewport
+
+        this.columns = 0;
+        this.cardWidth = 0;
+        this.rowHeight = 0;
+        this.measured = false; // card size is known
+        this.stale = true; // rendered rows no longer match the items
+
+        this.frame = null;
+        this.resizeObserver = null;
+
+        var self = this;
+        this.onScroll = function () {
+            self.schedule(false);
+        };
+    }
+
+    Grid.prototype = {
+        /**
+         * Finds the container and prepares it. Done again if gradio replaced the element.
+         */
+        mount: function () {
+            if (this.scroller && this.scroller.isConnected) return true;
+
+            var scroller = gradioApp().querySelector(
+                "#" + this.tabnameFull + "_cards"
+            );
+            if (!scroller) return false;
+
             var self = this;
 
-            this.container = gradioApp().querySelector(
-                "#" + this.tabname_full + "_cards"
-            );
-            if (!this.container) {
-                console.warn(
-                    "VirtualScroll: Container not found for",
-                    this.tabname_full
-                );
-                return false;
-            }
+            this.scroller = scroller;
+            this.rows.clear();
+            this.measured = false;
+            this.stale = true;
 
-            var originalCards = this.container.querySelectorAll("div.card");
-            if (originalCards.length < CONFIG.MIN_CARDS_FOR_VIRTUAL) {
-                console.log(
-                    "VirtualScroll: Too few cards for virtualization",
-                    originalCards.length
-                );
-                return false;
-            }
+            scroller.textContent = "";
+            this.status = el("div", "extra-network-cards-status");
+            this.canvas = el("div", "extra-network-cards-canvas");
+            scroller.appendChild(this.status);
+            scroller.appendChild(this.canvas);
 
-            console.log(
-                "VirtualScroll: Initializing for",
-                this.tabname_full,
-                "with",
-                originalCards.length,
-                "cards"
-            );
-
-            // Extract card data before removing
-            this.allCards = [];
-            originalCards.forEach(function (card) {
-                self.allCards.push(new CardData(card));
+            scroller.addEventListener("scroll", this.onScroll, {
+                passive: true,
             });
-            this.filteredCards = this.allCards.slice();
 
-            // Get card dimensions from first card before removing
-            if (originalCards.length > 0) {
-                var firstCard = originalCards[0];
-                var rect = firstCard.getBoundingClientRect();
-                this.cardWidth = rect.width || 140;
-                this.cardHeight = rect.height || 200;
+            // Also fires when the tab is shown for the first time: until then the container has no size.
+            if (this.resizeObserver) this.resizeObserver.disconnect();
+            this.resizeObserver = new ResizeObserver(function () {
+                self.schedule(true);
+            });
+            this.resizeObserver.observe(scroller);
 
-                // Get computed styles for gap
-                var containerStyle = window.getComputedStyle(this.container);
-                this.gap =
-                    parseInt(containerStyle.gap) ||
-                    parseInt(containerStyle.gridGap) ||
-                    10;
-            }
-
-            // Setup the virtual scroll structure
-            this.setupDOM();
-
-            // Calculate layout
-            this.calculateLayout();
-
-            // Initial render
-            this.render();
-
-            // Setup event listeners
-            this.setupEvents();
-
-            // ここを有効にすると一度にすべてのアイテムをプリロードする
-            // this.preloadAllImages();
-            this.isInitialized = true;
             return true;
         },
-        preloadAllImages: function () {
-            var self = this;
-            this.allCards.forEach(function (cardData) {
-                if (
-                    cardData.backgroundUrl &&
-                    !self.imageCache.has(cardData.backgroundUrl)
-                ) {
-                    self.preloadQueue.push(cardData.backgroundUrl);
-                }
-            });
-            this.processPreloadQueue();
-        },
 
         /**
-         * Setup DOM structure for virtual scrolling
+         * Receives the state of the page's item list.
          */
-        setupDOM: function () {
-            // Clear container
-            this.container.innerHTML = "";
+        setState: function (state) {
+            if (!this.mount()) return;
 
-            // Create scroll container (handles overflow)
-            this.scrollContainer = this.container;
-            this.scrollContainer.style.overflow = "auto";
-            this.scrollContainer.style.position = "relative";
-
-            // Create content wrapper (sets total height)
-            this.contentWrapper = document.createElement("div");
-            this.contentWrapper.className = "virtual-scroll-content";
-            this.contentWrapper.style.position = "relative";
-            this.contentWrapper.style.width = "100%";
-            this.scrollContainer.appendChild(this.contentWrapper);
-
-            // Create cards container (holds visible cards)
-            this.cardsHolder = document.createElement("div");
-            this.cardsHolder.className =
-                "virtual-scroll-cards extra-network-cards";
-            this.cardsHolder.style.display = "grid";
-            this.cardsHolder.style.gridTemplateColumns =
-                "repeat(auto-fill, minmax(140px, 1fr))";
-            this.cardsHolder.style.gap = "var(--spacing-lg, 10px)";
-            this.cardsHolder.style.position = "absolute";
-            this.cardsHolder.style.left = "0";
-            this.cardsHolder.style.right = "0";
-            this.contentWrapper.appendChild(this.cardsHolder);
-        },
-
-        /**
-         * Calculate layout dimensions
-         */
-        calculateLayout: function () {
-            var containerWidth = this.scrollContainer.clientWidth;
-            this.containerHeight = this.scrollContainer.clientHeight || 600;
-
-            // Calculate cards per row
-            var minCardWidth = 140;
-            this.cardsPerRow = Math.max(
-                1,
-                Math.floor(containerWidth / (minCardWidth + this.gap))
+            this.scroller.classList.toggle(
+                "extra-network-cards--loading",
+                state.status === "loading"
             );
 
-            // Recalculate card width based on grid
-            this.cardWidth =
-                (containerWidth - (this.cardsPerRow - 1) * this.gap) /
-                this.cardsPerRow;
-
-            // Row height includes gap
-            this.rowHeight = this.cardHeight + this.gap;
-
-            // Calculate total height
-            var totalRows = Math.ceil(
-                this.filteredCards.length / this.cardsPerRow
-            );
-            var totalHeight = totalRows * this.rowHeight;
-            this.contentWrapper.style.height = totalHeight + "px";
-        },
-
-        /**
-         * Setup event listeners
-         */
-        setupEvents: function () {
-            var self = this;
-
-            // Scroll handler with RAF throttling
-            this.scrollContainer.addEventListener(
-                "scroll",
-                function () {
-                    if (self.scrollRAF) return;
-
-                    self.scrollRAF = requestAnimationFrame(function () {
-                        self.scrollRAF = null;
-                        self.onScroll();
-                    });
-                },
-                { passive: true }
-            );
-
-            // Resize handler with debouncing
-            var resizeObserver = new ResizeObserver(function () {
-                clearTimeout(self.resizeTimer);
-                self.resizeTimer = setTimeout(function () {
-                    self.calculateLayout();
-                    self.render();
-                }, CONFIG.DEBOUNCE_RESIZE);
-            });
-            resizeObserver.observe(this.scrollContainer);
-        },
-
-        /**
-         * Handle scroll event
-         */
-        onScroll: function () {
-            this.scrollTop = this.scrollContainer.scrollTop;
-            this.render();
-            this.preloadImages();
-        },
-
-        /**
-         * Calculate which cards should be visible
-         */
-        getVisibleRange: function () {
-            var firstVisibleRow = Math.floor(this.scrollTop / this.rowHeight);
-            var lastVisibleRow = Math.ceil(
-                (this.scrollTop + this.containerHeight) / this.rowHeight
-            );
-
-            var startIndex = Math.max(
-                0,
-                (firstVisibleRow - CONFIG.BUFFER_SIZE) * this.cardsPerRow
-            );
-            var endIndex = Math.min(
-                this.filteredCards.length,
-                (lastVisibleRow + CONFIG.BUFFER_SIZE) * this.cardsPerRow
-            );
-
-            return { start: startIndex, end: endIndex };
-        },
-
-        /**
-         * Render visible cards
-         */
-        render: function () {
-            var range = this.getVisibleRange();
-
-            // Skip if range hasn't changed significantly
-            if (
-                range.start === this.renderedRange.start &&
-                range.end === this.renderedRange.end
-            ) {
-                return;
+            if (state.status === "ready") {
+                this.data = state.data;
+                this.update();
+            } else if (!this.data) {
+                this.status.textContent =
+                    state.status === "loading"
+                        ? "Loading..."
+                        : "Could not load the list. Press the refresh button to try again.";
             }
-
-            this.renderedRange = range;
-
-            // Calculate position for cards container
-            var startRow = Math.floor(range.start / this.cardsPerRow);
-            var topOffset = startRow * this.rowHeight;
-            this.cardsHolder.style.top = topOffset + "px";
-
-            // Build HTML for visible cards using DocumentFragment
-            var fragment = document.createDocumentFragment();
-
-            for (var i = range.start; i < range.end; i++) {
-                var cardData = this.filteredCards[i];
-                if (!cardData) continue;
-
-                var cardEl = this.createCardElement(cardData, i);
-                fragment.appendChild(cardEl);
-            }
-
-            // Replace content
-            this.cardsHolder.innerHTML = "";
-            this.cardsHolder.appendChild(fragment);
         },
 
         /**
-         * Create a card DOM element from CardData
+         * Sets search and sort. Scrolls back to the top when they change.
          */
-        createCardElement: function (cardData, index) {
-            var card = document.createElement("div");
-            card.className = cardData.className;
-            card.setAttribute("data-name", cardData.name);
-            card.setAttribute("data-sort-default", cardData.sortDefault);
-            card.setAttribute("data-sort-name", cardData.sortName);
-            card.setAttribute(
-                "data-sort-date-created",
-                cardData.sortDateCreated
-            );
-            card.setAttribute(
-                "data-sort-date-modified",
-                cardData.sortDateModified
-            );
-            card.setAttribute("data-virtual-index", index);
+        setView: function (view) {
+            var viewKey = JSON.stringify(view);
+            if (viewKey === this.viewKey) return;
 
-            // Lazy load background image
-            if (cardData.backgroundUrl) {
-                if (this.imageCache.has(cardData.backgroundUrl)) {
-                    card.setAttribute("style", cardData.style);
-                } else {
-                    // Remove background-image from style for lazy loading
-                    var styleWithoutBg = cardData.style.replace(
-                        /background-image:\s*url\([^)]+\);?/gi,
-                        ""
-                    );
-                    card.setAttribute("style", styleWithoutBg);
-                    card.setAttribute("data-bg-url", cardData.backgroundUrl);
-                    this.lazyLoadImage(card, cardData.backgroundUrl);
+            var isFirst = this.viewKey === null;
+            this.view = view;
+            this.viewKey = viewKey;
+
+            if (!this.data || !this.mount()) return;
+
+            if (!isFirst) this.scroller.scrollTop = 0;
+            this.update();
+        },
+
+        /**
+         * Recomputes which items are shown, and in what order, then draws them.
+         */
+        update: function () {
+            if (!this.data || !this.mount()) return;
+
+            var view = this.view;
+            var term = view.term.trim();
+            var matches;
+
+            if (view.useRegex) {
+                try {
+                    var regex = new RegExp(term, "i");
+                    matches = function (text) {
+                        return regex.test(text);
+                    };
+                } catch (error) {
+                    // Invalid regex, treat as no match
+                    matches = function () {
+                        return false;
+                    };
                 }
             } else {
-                card.setAttribute("style", cardData.style);
+                term = term.toLowerCase();
+                matches = function (text) {
+                    return text.indexOf(term) !== -1;
+                };
             }
 
-            if (cardData.onclick) {
-                card.setAttribute("onclick", cardData.onclick);
+            var items = this.data.items.filter(function (item) {
+                // items in hidden directories only show up when searched for
+                if (item.search_only && term.length < 4) return false;
+                return matches(item.searchText);
+            });
+
+            items.sort(compareBy(view.sortKey));
+            if (view.descending) items.reverse();
+
+            this.visibleItems = items;
+            this.measured = false; // options that set the card size arrive with the data
+            this.stale = true;
+
+            if (this.data.items.length === 0) {
+                this.status.innerHTML = this.data.no_cards_html || "";
+            } else {
+                this.status.textContent = "";
             }
 
-            card.innerHTML = cardData.innerHTML;
+            this.layout();
+        },
+
+        /**
+         * Asks for a redraw on the next frame; scroll and resize events arrive in bursts.
+         * remeasure: the size of the cards may have changed too.
+         */
+        schedule: function (remeasure) {
+            if (remeasure) this.measured = false;
+            if (this.frame !== null) return;
+
+            var self = this;
+            this.frame = requestAnimationFrame(function () {
+                self.frame = null;
+                self.layout();
+            });
+        },
+
+        /**
+         * Card size comes from CSS and from options, so an invisible card is laid out to learn it.
+         */
+        measure: function () {
+            var row = el("div", "extra-network-cards-row");
+            row.style.visibility = "hidden";
+            var card = this.createCard({
+                name: "",
+                filename: "",
+                search_terms: [],
+                sort_keys: {},
+                onclick: "",
+            });
+            row.appendChild(card);
+            this.canvas.appendChild(row);
+
+            var rect = card.getBoundingClientRect();
+            var style = window.getComputedStyle(card);
+            var width =
+                rect.width +
+                (parseFloat(style.marginLeft) || 0) +
+                (parseFloat(style.marginRight) || 0);
+            var height =
+                rect.height +
+                (parseFloat(style.marginTop) || 0) +
+                (parseFloat(style.marginBottom) || 0);
+
+            this.canvas.removeChild(row);
+
+            if (!(width > 0 && height > 0)) return false;
+
+            if (width !== this.cardWidth || height !== this.rowHeight) {
+                this.cardWidth = width;
+                this.rowHeight = height;
+                this.stale = true;
+            }
+            this.measured = true;
+            return true;
+        },
+
+        /**
+         * Fits the grid to the container and draws the rows that are in view.
+         */
+        layout: function () {
+            if (!this.data || !this.mount()) return;
+
+            var width = this.scroller.clientWidth;
+            // Nothing can be measured while the tab is hidden; the resize observer calls again once it is shown.
+            if (!width || (!this.measured && !this.measure())) return;
+
+            var columns = Math.max(
+                1,
+                Math.floor((width + 0.5) / this.cardWidth)
+            );
+            if (columns !== this.columns) {
+                this.columns = columns;
+                this.stale = true;
+            }
+
+            var rowCount = Math.ceil(this.visibleItems.length / columns);
+            this.canvas.style.height = rowCount * this.rowHeight + "px";
+
+            if (this.stale) {
+                this.rows.forEach(discardRow);
+                this.rows.clear();
+                this.stale = false;
+            }
+
+            // position of the viewport relative to the first row
+            var top =
+                this.scroller.getBoundingClientRect().top -
+                this.canvas.getBoundingClientRect().top;
+            var bottom = top + this.scroller.clientHeight;
+
+            var first = Math.max(
+                0,
+                Math.floor(top / this.rowHeight) - CONFIG.OVERSCAN_ROWS
+            );
+            var last = Math.min(
+                rowCount - 1,
+                Math.floor(bottom / this.rowHeight) + CONFIG.OVERSCAN_ROWS
+            );
+
+            var rows = this.rows;
+            rows.forEach(function (row, index) {
+                if (index < first || index > last) {
+                    discardRow(row);
+                    rows.delete(index);
+                }
+            });
+
+            for (var index = first; index <= last; index++) {
+                if (!rows.has(index)) {
+                    var row = this.createRow(index);
+                    rows.set(index, row);
+                    this.canvas.appendChild(row);
+                }
+            }
+        },
+
+        createRow: function (index) {
+            var row = el("div", "extra-network-cards-row");
+            row.style.top = index * this.rowHeight + "px";
+
+            var start = index * this.columns;
+            var end = Math.min(start + this.columns, this.visibleItems.length);
+            for (var i = start; i < end; i++) {
+                row.appendChild(this.createCard(this.visibleItems[i]));
+            }
+
+            return row;
+        },
+
+        /**
+         * Javascript that runs when the item is chosen.
+         */
+        onclickFor: function (item) {
+            if (item.onclick !== undefined && item.onclick !== null) {
+                return item.onclick;
+            }
+
+            // prompt and negative_prompt are javascript expressions, evaluated when the card is clicked
+            return (
+                "cardClicked('" +
+                this.tabname +
+                "', " +
+                item.prompt +
+                ", " +
+                item.negative_prompt +
+                ", " +
+                (this.data && this.data.allow_negative_prompt
+                    ? "true"
+                    : "false") +
+                ");"
+            );
+        },
+
+        /**
+         * Does what clicking the item's card does; the card itself may not exist at the moment.
+         */
+        activate: function (item, event) {
+            return new Function("event", this.onclickFor(item)).call(
+                null,
+                event
+            );
+        },
+
+        /**
+         * Builds the element for one item; same structure as html/extra-networks-card.html.
+         */
+        createCard: function (item) {
+            var data = this.data || {};
+            var tabname = this.tabname;
+            var pageName = this.pageName;
+
+            var card = el("div", "card");
+            if (data.card_style) card.setAttribute("style", data.card_style);
+            card.setAttribute("data-name", item.name);
+            Object.keys(item.sort_keys || {}).forEach(function (key) {
+                card.setAttribute("data-sort-" + key, item.sort_keys[key]);
+            });
+
+            card.setAttribute("onclick", this.onclickFor(item));
+
+            if (item.preview) {
+                var img = el("img", "preview");
+                img.loading = "lazy";
+                img.decoding = "async";
+                img.onerror = function () {
+                    img.remove(); // leaves the "no preview" background
+                };
+                img.src = item.preview;
+                card.appendChild(img);
+
+                // Shown while hovering, like the buttons on the right. The preview is a thumbnail,
+                // these two work with the image it was made from.
+                var imageButtons = el("div", "image-button-row");
+                var open = cardButton(
+                    "a",
+                    "open-original-button",
+                    "Open original preview image in new tab",
+                    "event.stopPropagation()"
+                );
+                open.href = originalImageUrl(item.preview);
+                open.target = "_blank";
+                open.rel = "noopener";
+                imageButtons.appendChild(open);
+
+                if (
+                    PREVIEW_ROUTES.test(item.preview) &&
+                    gradioApp().getElementById("pnginfo_extra_networks_send")
+                ) {
+                    var send = cardButton(
+                        "div",
+                        "send-pnginfo-button",
+                        "Send original preview image to PNG Info",
+                        "extraNetworksSendPreviewToPngInfo(event)"
+                    );
+                    send.setAttribute("data-preview", item.preview);
+                    imageButtons.appendChild(send);
+                }
+                card.appendChild(imageButtons);
+            }
+
+            var buttons = el("div", "button-row");
+            var copyPath = cardButton(
+                "div",
+                "copy-path-button",
+                "Copy path to clipboard",
+                "extraNetworksCopyCardPath(event)"
+            );
+            copyPath.setAttribute("data-clipboard-text", item.filename || "");
+            buttons.appendChild(copyPath);
+            if (item.has_metadata) {
+                buttons.appendChild(
+                    cardButton(
+                        "div",
+                        "metadata-button",
+                        "Show internal metadata",
+                        "extraNetworksRequestMetadata(event, '" +
+                            pageName +
+                            "')"
+                    )
+                );
+            }
+            buttons.appendChild(
+                cardButton(
+                    "div",
+                    "edit-button",
+                    "Edit metadata",
+                    "extraNetworksEditUserMetadata(event, '" +
+                        tabname +
+                        "', '" +
+                        pageName +
+                        "')"
+                )
+            );
+            card.appendChild(buttons);
+
+            var actions = el("div", "actions");
+            var additional = el("div", "additional");
+            (item.search_terms || []).forEach(function (term) {
+                var span = el(
+                    "span",
+                    "hidden search_terms" +
+                        (item.search_only ? " search_only" : "")
+                );
+                span.textContent = term;
+                additional.appendChild(span);
+            });
+            actions.appendChild(additional);
+
+            var name = el("span", "name");
+            name.textContent = item.name;
+            actions.appendChild(name);
+
+            var description = el("span", "description");
+            if (data.description_is_html) {
+                description.innerHTML = item.description || "";
+            } else {
+                description.textContent = item.description || "";
+            }
+            actions.appendChild(description);
+            card.appendChild(actions);
 
             return card;
-        },
-
-        /**
-         * Lazy load a single image
-         */
-        lazyLoadImage: function (cardEl, url) {
-            var self = this;
-
-            if (this.imageCache.has(url)) {
-                this.applyBackgroundImage(cardEl, url);
-                return;
-            }
-
-            var img = new Image();
-            img.onload = function () {
-                self.imageCache.add(url);
-                // Card might have been recycled, check if still needs this image
-                if (cardEl.getAttribute("data-bg-url") === url) {
-                    self.applyBackgroundImage(cardEl, url);
-                }
-            };
-            img.src = url;
-        },
-
-        /**
-         * Apply background image to card
-         */
-        applyBackgroundImage: function (cardEl, url) {
-            var currentStyle = cardEl.getAttribute("style") || "";
-            cardEl.setAttribute(
-                "style",
-                currentStyle + '; background-image: url("' + url + '");'
-            );
-            cardEl.removeAttribute("data-bg-url");
-        },
-
-        /**
-         * Preload images ahead of scroll position
-         */
-        preloadImages: function () {
-            if (this.isPreloading) return;
-
-            var self = this;
-            var range = this.getVisibleRange();
-            var preloadEnd = Math.min(
-                this.filteredCards.length,
-                range.end + CONFIG.IMAGE_PRELOAD_AHEAD
-            );
-
-            this.preloadQueue = [];
-            for (var i = range.end; i < preloadEnd; i++) {
-                var cardData = this.filteredCards[i];
-                if (
-                    cardData &&
-                    cardData.backgroundUrl &&
-                    !this.imageCache.has(cardData.backgroundUrl)
-                ) {
-                    this.preloadQueue.push(cardData.backgroundUrl);
-                }
-            }
-
-            if (this.preloadQueue.length > 0) {
-                this.isPreloading = true;
-                this.processPreloadQueue();
-            }
-        },
-
-        /**
-         * Process image preload queue
-         */
-        processPreloadQueue: function () {
-            var self = this;
-
-            if (this.preloadQueue.length === 0) {
-                this.isPreloading = false;
-                return;
-            }
-
-            var url = this.preloadQueue.shift();
-            var img = new Image();
-            img.onload = img.onerror = function () {
-                self.imageCache.add(url);
-                // Use requestIdleCallback for non-urgent preloading
-                if (window.requestIdleCallback) {
-                    requestIdleCallback(function () {
-                        self.processPreloadQueue();
-                    });
-                } else {
-                    setTimeout(function () {
-                        self.processPreloadQueue();
-                    }, 10);
-                }
-            };
-            img.src = url;
-        },
-
-        /**
-         * Apply search filter
-         */
-        applyFilter: function (searchTerm, useRegex) {
-            var self = this;
-            useRegex = useRegex || false;
-
-            if (!useRegex) {
-                searchTerm = searchTerm.toLowerCase().trim();
-            } else {
-                searchTerm = searchTerm.trim();
-            }
-
-            this.filteredCards = [];
-
-            this.allCards.forEach(function (cardData) {
-                var visible = false;
-
-                if (useRegex) {
-                    // Regex search
-                    try {
-                        var regex = new RegExp(searchTerm, 'i');
-                        visible = regex.test(cardData.searchText);
-                    } catch (e) {
-                        // Invalid regex, treat as no match
-                        visible = false;
-                    }
-                } else {
-                    // Normal search (case-insensitive)
-                    visible = cardData.searchText.indexOf(searchTerm) !== -1;
-                }
-
-                if (cardData.searchOnly && searchTerm.length < 4) {
-                    visible = false;
-                }
-                cardData.visible = visible;
-
-                if (visible) {
-                    self.filteredCards.push(cardData);
-                }
-            });
-
-            // Recalculate layout and render
-            this.calculateLayout();
-            this.scrollContainer.scrollTop = 0;
-            this.scrollTop = 0;
-            this.renderedRange = { start: -1, end: -1 }; // Force re-render
-            this.render();
-        },
-
-        /**
-         * Apply sort
-         */
-        applySort: function (sortKey, descending) {
-            var sortField =
-                "sort" + sortKey.charAt(0).toUpperCase() + sortKey.slice(1);
-            if (sortKey === "default") {
-                sortField = "sortDefault";
-            }
-
-            this.filteredCards.sort(function (a, b) {
-                var aVal = a[sortField] || "";
-                var bVal = b[sortField] || "";
-
-                // Numeric comparison if both are numbers
-                var aNum = parseFloat(aVal);
-                var bNum = parseFloat(bVal);
-                if (!isNaN(aNum) && !isNaN(bNum)) {
-                    return aNum - bNum;
-                }
-
-                // String comparison
-                return aVal.localeCompare(bVal);
-            });
-
-            if (descending) {
-                this.filteredCards.reverse();
-            }
-
-            // Force re-render
-            this.renderedRange = { start: -1, end: -1 };
-            this.render();
-        },
-
-        /**
-         * Refresh all cards (e.g., after external data change)
-         */
-        refresh: function () {
-            this.destroy();
-            this.init();
-        },
-
-        /**
-         * Cleanup
-         */
-        destroy: function () {
-            if (this.scrollRAF) {
-                cancelAnimationFrame(this.scrollRAF);
-            }
-            clearTimeout(this.resizeTimer);
-            this.isInitialized = false;
         },
     };
 
     // Public API
     return {
-        /**
-         * Initialize virtual scrolling for a tab
-         */
-        init: function (tabname_full) {
-            if (instances[tabname_full]) {
-                instances[tabname_full].destroy();
-            }
+        CONFIG: CONFIG,
 
-            var vs = new VirtualScroll(tabname_full);
-            if (vs.init()) {
-                instances[tabname_full] = vs;
-                return true;
+        /** Returns the grid of a page in a tab, creating it on first use. */
+        create: function (tabname, pageName) {
+            var key = tabname + "_" + pageName;
+            if (!instances[key]) {
+                instances[key] = new Grid(tabname, pageName);
             }
-            return false;
+            return instances[key];
         },
 
-        /**
-         * Get instance for a tab
-         */
+        /** Returns the grid for an id like "txt2img_lora", if there is one. */
         get: function (tabname_full) {
             return instances[tabname_full];
         },
+    };
+})();
 
-        /**
-         * Apply filter to a tab's cards
-         */
-        applyFilter: function (tabname_full, searchTerm) {
-            var instance = instances[tabname_full];
-            if (instance && instance.isInitialized) {
-                var regexCheckbox = gradioApp().querySelector(
-                    "#" + tabname_full + "_extra_regex"
+// ============================================================================
+// Directory tree, built as it is opened
+// ============================================================================
+
+var ExtraNetworksTree = (function () {
+    "use strict";
+
+    var states = {}; // "txt2img_lora" -> what the tree in that pane was built from
+    var nodes = new WeakMap(); // <ul> of a directory -> its content, until the directory is opened
+
+    /** Same order as natural_sort_key on the server: numbers inside names count as numbers. */
+    function naturalCompare(a, b) {
+        var as = a.split(/([0-9]+)/);
+        var bs = b.split(/([0-9]+)/);
+        for (var i = 0; i < Math.min(as.length, bs.length); i++) {
+            var x, y;
+            if (i % 2) {
+                x = parseInt(as[i]);
+                y = parseInt(bs[i]);
+            } else {
+                x = as[i].toLowerCase();
+                y = bs[i].toLowerCase();
+            }
+            if (x !== y) return x < y ? -1 : 1;
+        }
+        return as.length - bs.length;
+    }
+
+    function el(tag, className) {
+        var element = document.createElement(tag);
+        if (className) element.className = className;
+        return element;
+    }
+
+    /** Groups the items into nested directories by their tree_path. */
+    function buildModel(data) {
+        var separator = data.path_separator || "/";
+        var root = { dirs: Object.create(null), files: [] };
+
+        data.items.forEach(function (item) {
+            if (!item.tree_path) return;
+
+            var parts = item.tree_path.split(separator);
+            var node = root;
+            var path = "";
+            for (var i = 0; i < parts.length - 1; i++) {
+                path = path ? path + separator + parts[i] : parts[i];
+                if (!node.dirs[parts[i]]) {
+                    node.dirs[parts[i]] = {
+                        name: parts[i],
+                        path: path,
+                        dirs: Object.create(null),
+                        files: [],
+                    };
+                }
+                node = node.dirs[parts[i]];
+            }
+            node.files.push(item);
+        });
+
+        return root;
+    }
+
+    /** One line of the tree; same structure as html/extra-networks-tree-button.html. */
+    function createContent(tabname, pageName, options) {
+        var filterText = el("span");
+        filterText.setAttribute("data-filterable-item-text", "");
+        filterText.hidden = true;
+
+        var content = el("div", "tree-list-content " + options.subclass);
+        content.setAttribute("type", "button");
+        content.setAttribute(
+            "onclick",
+            "extraNetworksTreeOnClick(event, '" +
+                tabname +
+                "', '" +
+                pageName +
+                "');"
+        );
+        content.setAttribute("data-path", options.path);
+        content.setAttribute("data-hash", options.hash || "");
+
+        var leadingAction = el(
+            "span",
+            "tree-list-item-action tree-list-item-action--leading"
+        );
+        leadingAction.appendChild(el("i", "tree-list-item-action-chevron"));
+        content.appendChild(leadingAction);
+
+        var leadingVisual = el(
+            "span",
+            "tree-list-item-visual tree-list-item-visual--leading"
+        );
+        leadingVisual.textContent = options.icon;
+        content.appendChild(leadingVisual);
+
+        var label = el(
+            "span",
+            "tree-list-item-label tree-list-item-label--truncate"
+        );
+        label.textContent = options.label;
+        content.appendChild(label);
+
+        content.appendChild(
+            el("span", "tree-list-item-visual tree-list-item-visual--trailing")
+        );
+
+        var trailingAction = el(
+            "span",
+            "tree-list-item-action tree-list-item-action--trailing"
+        );
+        content.appendChild(trailingAction);
+
+        return {
+            filterText: filterText,
+            content: content,
+            trailingAction: trailingAction,
+        };
+    }
+
+    function createDirItem(tabname, pageName, node) {
+        var li = el("li", "tree-list-item tree-list-item--has-subitem");
+        li.setAttribute("data-tree-entry-type", "dir");
+
+        var line = createContent(tabname, pageName, {
+            subclass: "tree-list-content-dir",
+            path: node.path,
+            icon: "🗀",
+            label: node.name,
+        });
+        li.appendChild(line.filterText);
+        li.appendChild(line.content);
+
+        // Stays empty until the directory is opened.
+        var ul = el("ul", "tree-list tree-list--subgroup");
+        ul.hidden = true;
+        nodes.set(ul, { tabname: tabname, pageName: pageName, node: node });
+        li.appendChild(ul);
+
+        return li;
+    }
+
+    function createFileItem(tabname, pageName, item) {
+        var li = el("li", "tree-list-item tree-list-item--subitem");
+        li.setAttribute("data-tree-entry-type", "file");
+
+        var line = createContent(tabname, pageName, {
+            subclass: "tree-list-content-file",
+            path: item.tree_path,
+            hash: item.shorthash,
+            icon: "🗎",
+            label: item.name,
+        });
+        line.content.setAttribute("data-name", item.name);
+
+        // The buttons look for the name two levels up, where a card has it.
+        line.trailingAction.setAttribute("data-name", item.name);
+        var buttons = el("div", "button-row");
+        var copyPath = el("div", "copy-path-button card-button");
+        copyPath.title = "Copy path to clipboard";
+        copyPath.setAttribute("onclick", "extraNetworksCopyCardPath(event)");
+        copyPath.setAttribute("data-clipboard-text", item.filename || "");
+        buttons.appendChild(copyPath);
+        if (item.has_metadata) {
+            var metadata = el("div", "metadata-button card-button");
+            metadata.title = "Show internal metadata";
+            metadata.setAttribute(
+                "onclick",
+                "extraNetworksRequestMetadata(event, '" + pageName + "')"
+            );
+            buttons.appendChild(metadata);
+        }
+        var edit = el("div", "edit-button card-button");
+        edit.title = "Edit metadata";
+        edit.setAttribute(
+            "onclick",
+            "extraNetworksEditUserMetadata(event, '" +
+                tabname +
+                "', '" +
+                pageName +
+                "')"
+        );
+        buttons.appendChild(edit);
+        line.trailingAction.appendChild(buttons);
+
+        li.appendChild(line.filterText);
+        li.appendChild(line.content);
+
+        return li;
+    }
+
+    /**
+     * Creates the entries of a directory. Happens when it is opened for the first time, so a
+     * collapsed directory costs nothing however many files it has.
+     */
+    function populate(ul) {
+        var pending = nodes.get(ul);
+        if (!pending) return;
+        nodes.delete(ul);
+
+        var node = pending.node;
+        var fragment = document.createDocumentFragment();
+
+        // Directories are always displayed before files.
+        Object.keys(node.dirs)
+            .sort(naturalCompare)
+            .forEach(function (name) {
+                fragment.appendChild(
+                    createDirItem(
+                        pending.tabname,
+                        pending.pageName,
+                        node.dirs[name]
+                    )
                 );
-                var useRegex = regexCheckbox && regexCheckbox.checked;
-                instance.applyFilter(searchTerm, useRegex);
-                return true;
-            }
-            return false;
-        },
+            });
 
-        /**
-         * Apply sort to a tab's cards
-         */
-        applySort: function (tabname_full, sortKey, descending) {
-            var instance = instances[tabname_full];
-            if (instance && instance.isInitialized) {
-                instance.applySort(sortKey, descending);
-                return true;
-            }
-            return false;
-        },
+        node.files
+            .slice()
+            .sort(function (a, b) {
+                return naturalCompare(a.tree_path, b.tree_path);
+            })
+            .forEach(function (item) {
+                fragment.appendChild(
+                    createFileItem(pending.tabname, pending.pageName, item)
+                );
+            });
 
-        /**
-         * Refresh a tab
-         */
-        refresh: function (tabname_full) {
-            var instance = instances[tabname_full];
-            if (instance) {
-                instance.refresh();
-            }
-        },
+        ul.appendChild(fragment);
+    }
 
-        /**
-         * Check if virtualization is active for a tab
-         */
-        isActive: function (tabname_full) {
-            var instance = instances[tabname_full];
-            return instance && instance.isInitialized;
-        },
+    /** Opens the directories whose paths are given, as far as they still exist. */
+    function reopen(ul, expanded) {
+        ul.querySelectorAll(
+            ":scope > li > .tree-list-content-dir"
+        ).forEach(function (content) {
+            if (!expanded.has(content.dataset.path)) return;
+
+            var childUl = content.nextElementSibling;
+            populate(childUl);
+            childUl.hidden = false;
+            content.dataset.expanded = "";
+            reopen(childUl, expanded);
+        });
+    }
+
+    /**
+     * Shows the tree for a page in a tab. Does nothing if the files are the same as last time.
+     */
+    function render(tabname, pageName, data) {
+        var key = tabname + "_" + pageName;
+        var container = gradioApp().getElementById(key + "_tree");
+        if (!container) return;
+
+        var signature = data.items
+            .map(function (item) {
+                return item.tree_path || "";
+            })
+            .join("\n");
+        var state = states[key];
+        if (
+            state &&
+            state.signature === signature &&
+            state.list.isConnected
+        ) {
+            return;
+        }
+
+        // what the user had open stays open
+        var expanded = new Set();
+        var selected = null;
+        container
+            .querySelectorAll(".tree-list-content-dir")
+            .forEach(function (content) {
+                if ("expanded" in content.dataset) {
+                    expanded.add(content.dataset.path);
+                }
+                if ("selected" in content.dataset) {
+                    selected = content.dataset.path;
+                }
+            });
+
+        var model = buildModel(data);
+        var list = el("ul", "tree-list tree-list--tree");
+        nodes.set(list, { tabname: tabname, pageName: pageName, node: model });
+        populate(list);
+        reopen(list, expanded);
+
+        if (selected !== null) {
+            list.querySelectorAll(".tree-list-content-dir").forEach(
+                function (content) {
+                    if (content.dataset.path === selected) {
+                        content.dataset.selected = "";
+                    }
+                }
+            );
+        }
+
+        container.textContent = "";
+        container.appendChild(list);
+        states[key] = { signature: signature, list: list };
+    }
+
+    return {
+        render: render,
+        populate: populate,
     };
 })();
 
@@ -705,6 +1070,41 @@ function toggleCss(key, css, enable) {
 var extraNetworksApplyFilter = {};
 var extraNetworksApplySort = {};
 var activePromptTextarea = {};
+
+/**
+ * Fills the directory buttons of the "Dirs" view.
+ */
+function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
+    var container = gradioApp().getElementById(
+        tabname + "_" + extra_networks_tabname + "_dirs"
+    );
+    if (!container) return;
+
+    container.textContent = "";
+    (data.dirs || []).forEach(function (subdir) {
+        var button = document.createElement("button");
+        button.className =
+            "lg secondary gradio-button custom-button" +
+            (subdir === "" ? " search-all" : "");
+        button.setAttribute(
+            "onclick",
+            "extraNetworksSearchButton('" +
+                tabname +
+                "', '" +
+                extra_networks_tabname +
+                "', event)"
+        );
+        button.textContent = subdir === "" ? "all" : subdir;
+        container.appendChild(button);
+    });
+}
+
+/**
+ * Asks the server for the items of all pages again and redraws the cards in every tab.
+ */
+function extraNetworksReloadItems() {
+    return ExtraNetworksData.reloadAll();
+}
 
 function setupExtraNetworksForTab(tabname) {
     function registerPrompt(tabname, id) {
@@ -743,161 +1143,68 @@ function setupExtraNetworksForTab(tabname) {
             var refresh = gradioApp().querySelector(
                 "#" + tabname_full + "_extra_refresh"
             );
-            var currentSort = "";
 
             if (!search || !sort_dir || !refresh) {
                 return;
             }
 
-            // Try to initialize virtual scrolling
-            var useVirtual = VirtualScrollManager.init(tabname_full);
+            // "lora", "textual_inversion", ...: the part of the id after the tab's name
+            var pageName = tabname_full.slice(tabname.length + 1);
+            var grid = ExtraNetworksGrid.create(tabname, pageName);
+            var regexCheckbox = gradioApp().querySelector(
+                "#" + tabname_full + "_extra_regex"
+            );
 
-            var applyFilter = function (force) {
-                var regexCheckbox = gradioApp().querySelector(
-                    "#" + tabname_full + "_extra_regex"
-                );
-                var useRegex = regexCheckbox && regexCheckbox.checked;
-                var searchTerm = search.value;
-
-                if (!useRegex) {
-                    searchTerm = searchTerm.toLowerCase();
-                } else {
-                    searchTerm = searchTerm.trim();
-                }
-
-                if (useVirtual && VirtualScrollManager.isActive(tabname_full)) {
-                    VirtualScrollManager.applyFilter(tabname_full, searchTerm);
-                } else {
-                    // Fallback to original filter logic
-                    gradioApp()
-                        .querySelectorAll(
-                            "#" + tabname + "_extra_tabs div.card"
-                        )
-                        .forEach(function (elem) {
-                            var searchOnly = elem.querySelector(".search_only");
-                            var text = Array.prototype.map
-                                .call(
-                                    elem.querySelectorAll(
-                                        ".search_terms, .description"
-                                    ),
-                                    function (t) {
-                                        return t.textContent.toLowerCase();
-                                    }
-                                )
-                                .join(" ");
-
-                            var visible = false;
-
-                            if (useRegex) {
-                                // Regex search
-                                try {
-                                    var regex = new RegExp(searchTerm, 'i');
-                                    visible = regex.test(text);
-                                } catch (e) {
-                                    // Invalid regex, treat as no match
-                                    visible = false;
-                                }
-                            } else {
-                                // Normal search (case-insensitive)
-                                visible = text.indexOf(searchTerm) != -1;
-                            }
-
-                            if (searchOnly && searchTerm.length < 4) {
-                                visible = false;
-                            }
-                            if (visible) {
-                                elem.classList.remove("hidden");
-                            } else {
-                                elem.classList.add("hidden");
-                            }
-                        });
-                }
-
-                applySort(force);
-            };
-
-            var applySort = function (force) {
-                var reverse = sort_dir.dataset.sortdir == "Descending";
-                var activeSearchElem = gradioApp().querySelector(
+            // Search and sort both come down to telling the grid what to show.
+            var applyView = function () {
+                var activeSortElem = gradioApp().querySelector(
                     "#" +
                         tabname_full +
                         "_controls .extra-network-control--sort.extra-network-control--enabled"
                 );
-                var sortKey = activeSearchElem
-                    ? activeSearchElem.dataset.sortkey
-                    : "default";
 
-                if (useVirtual && VirtualScrollManager.isActive(tabname_full)) {
-                    VirtualScrollManager.applySort(
-                        tabname_full,
-                        sortKey,
-                        reverse
-                    );
-                } else {
-                    // Fallback to original sort logic
-                    var cards = gradioApp().querySelectorAll(
-                        "#" + tabname_full + " div.card"
-                    );
-                    var parent = gradioApp().querySelector(
-                        "#" + tabname_full + "_cards"
-                    );
-                    var sortKeyDataField =
-                        "sort" +
-                        sortKey.charAt(0).toUpperCase() +
-                        sortKey.slice(1);
-                    var sortKeyStore =
-                        sortKey +
-                        "-" +
-                        sort_dir.dataset.sortdir +
-                        "-" +
-                        cards.length;
-
-                    if (sortKeyStore == currentSort && !force) {
-                        return;
-                    }
-                    currentSort = sortKeyStore;
-
-                    var sortedCards = Array.from(cards);
-                    sortedCards.sort(function (cardA, cardB) {
-                        var a = cardA.dataset[sortKeyDataField];
-                        var b = cardB.dataset[sortKeyDataField];
-                        if (!isNaN(a) && !isNaN(b)) {
-                            return parseInt(a) - parseInt(b);
-                        }
-                        return a < b ? -1 : a > b ? 1 : 0;
-                    });
-
-                    if (reverse) {
-                        sortedCards.reverse();
-                    }
-
-                    parent.innerHTML = "";
-                    var frag = document.createDocumentFragment();
-                    sortedCards.forEach(function (card) {
-                        frag.appendChild(card);
-                    });
-                    parent.appendChild(frag);
-                }
+                grid.setView({
+                    term: search.value,
+                    useRegex: !!(regexCheckbox && regexCheckbox.checked),
+                    sortKey: activeSortElem
+                        ? activeSortElem.dataset.sortkey
+                        : "default",
+                    descending: sort_dir.dataset.sortdir == "Descending",
+                });
             };
 
             search.addEventListener("input", function () {
-                applyFilter();
-            });
+                // A directory of the tree stays marked as selected only while the search is the one it set.
+                var tree = gradioApp().getElementById(tabname_full + "_tree");
+                if (tree) {
+                    tree.querySelectorAll(
+                        ".tree-list-content[data-selected]"
+                    ).forEach(function (content) {
+                        if (content.dataset.path !== search.value) {
+                            delete content.dataset.selected;
+                        }
+                    });
+                }
 
-            var regexCheckbox = gradioApp().querySelector(
-                "#" + tabname_full + "_extra_regex"
-            );
+                applyView();
+            });
             if (regexCheckbox) {
-                regexCheckbox.addEventListener("change", function () {
-                    applyFilter();
-                });
+                regexCheckbox.addEventListener("change", applyView);
             }
 
-            applySort();
-            applyFilter();
+            applyView();
 
-            extraNetworksApplySort[tabname_full] = applySort;
-            extraNetworksApplyFilter[tabname_full] = applyFilter;
+            extraNetworksApplySort[tabname_full] = applyView;
+            extraNetworksApplyFilter[tabname_full] = applyView;
+
+            ExtraNetworksData.subscribe(pageName, function (state) {
+                grid.setState(state);
+                if (state.status === "ready") {
+                    extraNetworksRenderDirs(tabname, pageName, state.data);
+                    ExtraNetworksTree.render(tabname, pageName, state.data);
+                }
+            });
+            ExtraNetworksData.load(pageName);
 
             var controls = gradioApp().querySelector(
                 "#" + tabname_full + "_controls"
@@ -1001,10 +1308,15 @@ function setupExtraNetworks() {
 // Extra Network Prompt Handling
 // ============================================================================
 
-var re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/s;
-var re_extranet_g = /<([^:^>]+:[^:]+):[\d.]+>/g;
+// The weight may be negative: <lora:name:-0.5>
+var re_extranet = /<([^:^>]+:[^:]+):-?[\d.]+>(.*)/s;
+var re_extranet_g = /<([^:^>]+:[^:]+):-?[\d.]+>/g;
 var re_extranet_neg = /\(([^:^>]+:[\d.]+)\)/;
 var re_extranet_g_neg = /\(([^:^>]+:[\d.]+)\)/g;
+
+function extraNetworksEscapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
     var m = text.match(isNeg ? re_extranet_neg : re_extranet);
@@ -1055,8 +1367,15 @@ function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
             }
         }
     } else {
+        // Plain text such as the name of an embedding. It is looked for literally - names contain
+        // characters like "(", "+" and "." - and as a whole word, so that it is not cut out of a longer one.
         newTextareaText = textarea.value.replaceAll(
-            new RegExp(`((?:${extraTextBeforeNet})?${text})`, "g"),
+            new RegExp(
+                `((?:${extraNetworksEscapeRegExp(extraTextBeforeNet)})?(?<!\\w)${extraNetworksEscapeRegExp(
+                    text
+                )}(?!\\w))`,
+                "g"
+            ),
             ""
         );
         replaced = newTextareaText != textarea.value;
@@ -1152,6 +1471,8 @@ function extraNetworksTreeProcessDirectoryClick(
 
     function _expand_or_collapse(_ul, _btn) {
         if (_ul.hasAttribute("hidden")) {
+            // the entries of a directory are created when it is first opened
+            ExtraNetworksTree.populate(_ul);
             _ul.removeAttribute("hidden");
             _btn.dataset.expanded = "";
         } else {
@@ -1161,7 +1482,9 @@ function extraNetworksTreeProcessDirectoryClick(
     }
 
     function _remove_selected_from_all() {
-        var sels = document.querySelectorAll("div.tree-list-content");
+        // Only in the tree that was clicked: the other panes keep their own search, and so their selection.
+        var tree = btn.closest(".extra-network-tree") || document;
+        var sels = tree.querySelectorAll("div.tree-list-content");
         [...sels].forEach((el) => {
             delete el.dataset.selected;
         });
@@ -1210,24 +1533,15 @@ function extraNetworksTreeProcessFileClick(
     tabname,
     extra_networks_tabname
 ) {
-    // Handle file click - typically triggers the card action
-    var path = btn.dataset.path;
-    var hash = btn.dataset.hash;
-
-    // Find and click the corresponding card
-    if (hash) {
-        var card = gradioApp().querySelector(
-            "#" +
-                tabname +
-                "_" +
-                extra_networks_tabname +
-                '_cards .card[data-name="' +
-                hash +
-                '"]'
-        );
-        if (card) {
-            card.click();
-        }
+    // Handle file click - does what clicking the card does. The card is looked up in the data:
+    // it only exists as an element while it is scrolled into view.
+    var grid = ExtraNetworksGrid.get(tabname + "_" + extra_networks_tabname);
+    var item = ExtraNetworksData.getItem(
+        extra_networks_tabname,
+        btn.dataset.name
+    );
+    if (grid && item) {
+        grid.activate(item, event);
     }
 }
 
@@ -1306,6 +1620,9 @@ function extraNetworksControlTreeViewOnClick(
     );
     var resizeHandle = pane.querySelector(".resize-handle");
 
+    // The "Dirs" style has directory buttons instead of a tree; the class toggled above hides them.
+    if (!tree) return;
+
     if (pane.classList.contains("extra-network-dirs-hidden")) {
         tree.style.display = "none";
         cards.style.flexGrow = "1";
@@ -1327,12 +1644,8 @@ function extraNetworksControlRefreshOnClick(
     var btn_refresh_internal = gradioApp().getElementById(
         tabname + "_" + extra_networks_tabname + "_extra_refresh_internal"
     );
+    // The server lists the files again, then calls extraNetworksReloadItems().
     btn_refresh_internal.dispatchEvent(new Event("click"));
-
-    // Re-initialize virtual scroll after refresh
-    setTimeout(function () {
-        VirtualScrollManager.refresh(tabname + "_" + extra_networks_tabname);
-    }, 500);
 }
 
 // ============================================================================
@@ -1476,10 +1789,33 @@ function requestGet(url, data, handler, errorHandler) {
 }
 
 function extraNetworksCopyCardPath(event) {
-    navigator.clipboard.writeText(
-        event.target.getAttribute("data-clipboard-text")
-    );
+    // First of all: the click is not meant for the card, whatever becomes of the copy.
     event.stopPropagation();
+
+    var text = event.target.getAttribute("data-clipboard-text");
+
+    // For pages without the clipboard API: it only exists on https and on localhost, not when the
+    // UI is opened from another device over plain http.
+    var copyWithSelection = function () {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand("copy");
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(copyWithSelection);
+    } else {
+        copyWithSelection();
+    }
 }
 
 function extraNetworksRequestMetadata(event, extraPage) {
@@ -1536,28 +1872,65 @@ function extraNetworksEditUserMetadata(event, tabname, extraPage) {
 }
 
 function extraNetworksRefreshSingleCard(page, tabname, name) {
+    // `page` is the page's name; its items are kept under the name of its tab
+    var pageName = page.replace(/ /g, "_");
+    var reloadPage = function () {
+        ExtraNetworksData.load(pageName, true);
+    };
+
     requestGet(
         "./sd_extra_networks/get-single-card",
         { page: page, tabname: tabname, name: name },
         function (data) {
-            if (data && data.html) {
-                var card = gradioApp().querySelector(
-                    `#${tabname}_${page.replace(
-                        " ",
-                        "_"
-                    )}_cards > .card[data-name="${name}"]`
-                );
-
-                var newDiv = document.createElement("DIV");
-                newDiv.innerHTML = data.html;
-                var newCard = newDiv.firstElementChild;
-
-                newCard.style.display = "";
-                card.parentElement.insertBefore(newCard, card);
-                card.parentElement.removeChild(card);
+            // Only this item changes; every tab showing the page redraws its visible cards.
+            if (
+                !data ||
+                !("item" in data) ||
+                !ExtraNetworksData.updateItem(pageName, name, data.item)
+            ) {
+                reloadPage();
             }
-        }
+        },
+        reloadPage
     );
+}
+
+/**
+ * Switches the main tabs to the one with the given element id, e.g. "tab_pnginfo".
+ */
+function extraNetworksSwitchToMainTab(tabId) {
+    var tabs = gradioApp().querySelector("#tabs");
+    if (!tabs) return;
+
+    var items = tabs.querySelectorAll(":scope > .tabitem");
+    var buttons = tabs.querySelectorAll(":scope > .tab-nav > button");
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].id == tabId && buttons[i]) {
+            buttons[i].click();
+            return;
+        }
+    }
+}
+
+/**
+ * Card button: shows the image a preview was made from in PNG Info, with its generation parameters.
+ */
+function extraNetworksSendPreviewToPngInfo(event) {
+    event.stopPropagation();
+
+    var button = event.target.closest(".card-button");
+    var source = gradioApp().querySelector(
+        "#pnginfo_extra_networks_source textarea, #pnginfo_extra_networks_source input"
+    );
+    var send = gradioApp().getElementById("pnginfo_extra_networks_send");
+    if (!button || !source || !send) return;
+
+    // The server looks the original image up from the preview link and puts it into PNG Info's image.
+    source.value = button.getAttribute("data-preview");
+    updateInput(source);
+    send.click();
+
+    extraNetworksSwitchToMainTab("tab_pnginfo");
 }
 
 window.addEventListener("keydown", function (event) {
@@ -1582,7 +1955,9 @@ function scheduleAfterScriptsCallbacks() {
 }
 
 onUiLoaded(function () {
-    var mutationObserver = new MutationObserver(function (m) {
+    var mutationObserver = null;
+
+    var check = function () {
         let existingSearchfields = gradioApp().querySelectorAll(
             "[id$='_extra_search']"
         ).length;
@@ -1595,12 +1970,21 @@ onUiLoaded(function () {
             !executedAfterScripts &&
             existingSearchfields >= neededSearchfields
         ) {
-            mutationObserver.disconnect();
+            if (mutationObserver) mutationObserver.disconnect();
             executedAfterScripts = true;
             scheduleAfterScriptsCallbacks();
         }
-    });
-    mutationObserver.observe(gradioApp(), { childList: true, subtree: true });
+    };
+
+    // The panes are part of the page from the start, so there may be no further mutation to wait for.
+    check();
+    if (!executedAfterScripts) {
+        mutationObserver = new MutationObserver(check);
+        mutationObserver.observe(gradioApp(), {
+            childList: true,
+            subtree: true,
+        });
+    }
 });
 
 uiAfterScriptsCallbacks.push(setupExtraNetworks);

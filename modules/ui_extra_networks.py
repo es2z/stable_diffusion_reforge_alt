@@ -1,5 +1,7 @@
 import functools
 import os.path
+import re
+import threading
 import urllib.parse
 from base64 import b64decode
 from io import BytesIO
@@ -7,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Union
 from dataclasses import dataclass
 
-from modules import shared, ui_extra_networks_user_metadata, errors, extra_networks, util
+from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, errors, extra_networks, util
 from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
@@ -19,7 +21,7 @@ from modules.infotext_utils import image_from_url_text
 
 extra_pages = []
 allowed_dirs = set()
-default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif"]
+default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif", "avif"]
 
 @functools.cache
 def allowed_preview_extensions_with_extra(extra_extensions=None):
@@ -94,9 +96,13 @@ def register_page(page):
     allowed_dirs.update(set(sum([x.allowed_directories_for_previews() for x in extra_pages], [])))
 
 
-def fetch_file(filename: str = ""):
-    from starlette.responses import FileResponse
+def get_page(name: str):
+    """Finds a registered page by its name or by the name of its tab."""
+    return next(iter([x for x in extra_pages if name in (x.name, x.extra_networks_tabname)]), None)
 
+
+def check_preview_file(filename: str):
+    """Raises unless the file is a preview image that the UI is allowed to read."""
     if not os.path.isfile(filename):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -107,14 +113,31 @@ def fetch_file(filename: str = ""):
     if ext not in allowed_preview_extensions():
         raise ValueError(f"File cannot be fetched: {filename}. Extensions allowed: {allowed_preview_extensions()}.")
 
-    # would profit from returning 304
-    return FileResponse(filename, headers={"Accept-Ranges": "bytes"})
+
+def fetch_file(filename: str = "", full: bool = False, mtime: str = ""):
+    """Serves a preview image.
+
+    Cards get a small cached JPEG that still carries the generation parameters of the original
+    (see ui_extra_networks_thumbnails); `full=1` asks for the original file.
+    """
+    from starlette.responses import FileResponse
+
+    check_preview_file(filename)
+
+    # links made by link_preview() change together with the file, so the browser can keep the response for good
+    cache_headers = ui_extra_networks_thumbnails.IMMUTABLE_CACHE_HEADERS if mtime else {}
+
+    if not full:
+        thumbnail = ui_extra_networks_thumbnails.thumbnail_for_file(filename)
+        if thumbnail is not None:
+            return FileResponse(thumbnail, media_type="image/jpeg", headers={**cache_headers})
+
+    return FileResponse(filename, headers={"Accept-Ranges": "bytes", **cache_headers})
 
 
-def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
-    from starlette.responses import Response
-
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+def get_cover_image(page: str = "", item: str = "", index: int = 0):
+    """Returns (page, raw bytes) of a cover image embedded into a model file."""
+    page = get_page(page)
     if page is None:
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -122,24 +145,80 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
     if metadata is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    cover_images = json.loads(metadata.get('ssmd_cover_images', {}))
+    cover_images = json.loads(metadata.get('ssmd_cover_images') or '[]')
     image = cover_images[index] if index < len(cover_images) else None
     if not image:
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        image = Image.open(BytesIO(b64decode(image)))
-        buffer = BytesIO()
-        image.save(buffer, format=image.format)
-        return Response(content=buffer.getvalue(), media_type=image.get_format_mimetype())
+        return page, b64decode(image)
     except Exception as err:
         raise ValueError(f"File cannot be fetched: {item}. Failed to load cover image.") from err
+
+
+def fetch_cover_images(page: str = "", item: str = "", index: int = 0, full: bool = False, mtime: str = ""):
+    from starlette.responses import FileResponse, Response
+
+    page, data = get_cover_image(page, item, index)
+    cache_headers = ui_extra_networks_thumbnails.IMMUTABLE_CACHE_HEADERS if mtime else {}
+
+    if not full:
+        model_filename = page.items.get(item, {}).get("filename") or f"{page.name}/{item}"
+        thumbnail = ui_extra_networks_thumbnails.thumbnail_for_bytes(
+            identity=f"{model_filename}|cover|{index}",
+            version=f"{mtime}|{len(data)}",
+            data=data,
+        )
+        if thumbnail is not None:
+            return FileResponse(thumbnail, media_type="image/jpeg", headers={**cache_headers})
+
+    try:
+        with Image.open(BytesIO(data)) as image:
+            media_type = image.get_format_mimetype()
+    except Exception as err:
+        raise ValueError(f"File cannot be fetched: {item}. Failed to load cover image.") from err
+
+    return Response(content=data, media_type=media_type, headers={**cache_headers})
+
+
+def load_preview_for_pnginfo(source: str):
+    """Turns the preview link of a card into a value for PNG Info's image component.
+
+    The original image is used, not the thumbnail. Files are handed over as a path so that gradio
+    passes them on byte for byte, the same as if the user had uploaded them.
+    """
+    try:
+        parsed = urllib.parse.urlparse(source or "")
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+        route = parsed.path.rsplit("/", 1)[-1]
+
+        if route == "thumb":
+            filename = query.get("filename", "")
+            check_preview_file(filename)
+            return filename
+
+        if route == "cover-images":
+            _, data = get_cover_image(query.get("page", ""), query.get("item", ""), int(query.get("index", 0)))
+            image = Image.open(BytesIO(data))
+            image.load()
+
+            # gradio re-encodes PIL images as PNG and keeps text chunks only; parameters stored in EXIF would get lost
+            geninfo, _ = read_info_from_image(image)
+            if geninfo and not isinstance(image.info.get("parameters"), str):
+                image.info["parameters"] = geninfo
+
+            return image
+
+        raise ValueError(f"not a preview link: {source}")
+    except Exception as e:
+        errors.display(e, "sending extra network preview to PNG Info")
+        return gr.update()
 
 
 def get_metadata(page: str = "", item: str = ""):
     from starlette.responses import JSONResponse
 
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+    page = get_page(page)
     if page is None:
         return JSONResponse({})
 
@@ -152,28 +231,59 @@ def get_metadata(page: str = "", item: str = ""):
     return JSONResponse({"metadata": json.dumps(metadata, indent=4, ensure_ascii=False)})
 
 
+re_tabname = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def check_tabname(tabname: str):
+    """tabname ends up inside generated HTML and JS, so only plain identifiers are accepted."""
+    if not re_tabname.match(tabname or ""):
+        raise HTTPException(status_code=400, detail="Invalid tabname")
+
+
+def get_items(page: str = ""):
+    """Data for all cards of a page. The browser builds the cards itself, and only those that are on screen."""
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    return JSONResponse(page.create_items_data())
+
+
 def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     from starlette.responses import JSONResponse
 
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+    check_tabname(tabname)
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
 
     try:
         item = page.create_item(name, enable_filter=False)
-        page.items[name] = item
+        if item is not None:
+            page.items[name] = item
     except Exception as e:
         errors.display(e, "creating item for extra network")
         item = page.items.get(name)
 
+    if item is None:
+        # no such item (anymore); the browser reloads the whole list when it gets this
+        raise HTTPException(status_code=404, detail="Item not found")
+
     page.read_user_metadata(item, use_cache=False)
     item_html = page.create_item_html(tabname, item, shared.html("extra-networks-card.html"))
 
-    return JSONResponse({"html": item_html})
+    # "item" is what the cards are built from; "html" is kept for other users of this endpoint
+    return JSONResponse({"html": item_html, "item": page.create_item_data(item)})
 
 
 def add_pages_to_demo(app):
     app.add_api_route("/sd_extra_networks/thumb", fetch_file, methods=["GET"])
     app.add_api_route("/sd_extra_networks/cover-images", fetch_cover_images, methods=["GET"])
     app.add_api_route("/sd_extra_networks/metadata", get_metadata, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/items", get_items, methods=["GET"])
     app.add_api_route("/sd_extra_networks/get-single-card", get_single_card, methods=["GET"])
 
 
@@ -191,6 +301,7 @@ class ExtraNetworksPage:
         self.allow_negative_prompt = False
         self.metadata = {}
         self.items = {}
+        self.items_lock = threading.RLock()
         self.lister = util.MassFileLister()
         # HTML Templates
         self.pane_tpl = shared.html("extra-networks-pane.html")
@@ -218,7 +329,8 @@ class ExtraNetworksPage:
     def link_preview(self, filename):
         quoted_filename = urllib.parse.quote(filename.replace('\\', '/'))
         mtime, _ = self.lister.mctime(filename)
-        return f"./sd_extra_networks/thumb?filename={quoted_filename}&mtime={mtime}"
+        # `t` only makes the link change together with the thumbnail settings
+        return f"./sd_extra_networks/thumb?filename={quoted_filename}&mtime={mtime}&t={ui_extra_networks_thumbnails.settings_signature()}"
 
     def search_terms_from_path(self, filename, possible_directories=None):
         abspath = os.path.abspath(filename)
@@ -284,20 +396,9 @@ class ExtraNetworksPage:
             }
         )
 
-        local_path = ""
-        filename = item.get("filename", "")
-        for reldir in self.allowed_directories_for_previews():
-            absdir = os.path.abspath(reldir)
-
-            if filename.startswith(absdir):
-                local_path = filename[len(absdir):]
-
         # if this is true, the item must not be shown in the default view, and must instead only be
         # shown when searching for it
-        if shared.opts.extra_networks_hidden_models == "Always":
-            search_only = False
-        else:
-            search_only = "/." in local_path or "\\." in local_path
+        search_only = self.is_search_only(item)
 
         if search_only and shared.opts.extra_networks_hidden_models == "Never":
             return ""
@@ -506,8 +607,8 @@ class ExtraNetworksPage:
 
         return f"<ul class='tree-list tree-list--tree'>{res}</ul>"
 
-    def create_dirs_view_html(self, tabname: str) -> str:
-        """Generates HTML for displaying folders."""
+    def list_subdirs(self) -> list[str]:
+        """Lists directories for the Dirs view, in the form they are searched for."""
 
         subdirs = {}
         for parentdir in [os.path.abspath(x) for x in self.allowed_directories_for_previews()]:
@@ -538,6 +639,13 @@ class ExtraNetworksPage:
 
         if subdirs:
             subdirs = {"": 1, **subdirs}
+
+        return list(subdirs)
+
+    def create_dirs_view_html(self, tabname: str) -> str:
+        """Generates HTML for displaying folders."""
+
+        subdirs = self.list_subdirs()
 
         subdirs_html = "".join([f"""
         <button class='lg secondary gradio-button custom-button{" search-all" if subdir == "" else ""}' onclick='extraNetworksSearchButton("{tabname}", "{self.extra_networks_tabname}", event)'>
@@ -570,33 +678,133 @@ class ExtraNetworksPage:
 
         return "".join(res)
 
+    def refresh_items(self):
+        """Lists the items of this page anew, filling `self.items` and `self.metadata`."""
+        with self.items_lock:
+            self.lister.reset()
+            self.metadata = {}
+
+            items_list = self.list_items()
+            self.items = {x["name"]: x for x in items_list}
+
+            # Populate the instance metadata for each item.
+            for item in self.items.values():
+                metadata = item.get("metadata")
+                if metadata:
+                    self.metadata[item["name"]] = metadata
+
+                if "user_metadata" not in item:
+                    self.read_user_metadata(item)
+
+    def is_search_only(self, item: dict) -> bool:
+        """True if the item is in a hidden directory, and so must only be shown when searching for it."""
+        if shared.opts.extra_networks_hidden_models == "Always":
+            return False
+
+        local_path = ""
+        filename = item.get("filename", "") or ""
+        for reldir in self.allowed_directories_for_previews():
+            absdir = os.path.abspath(reldir)
+
+            if filename.startswith(absdir):
+                local_path = filename[len(absdir):]
+
+        return "/." in local_path or "\\." in local_path
+
+    def tree_path(self, filename: str) -> str:
+        """Where the file goes in the tree view: its path starting from the name of the directory it was found in.
+
+        The same keys `get_tree` produces, e.g. "Lora/characters/name.safetensors".
+        """
+        if not filename:
+            return ""
+
+        abspath = os.path.abspath(filename)
+        for root in self.allowed_directories_for_previews():
+            if not root:
+                continue
+
+            root = os.path.abspath(root)
+            if os.path.normcase(abspath).startswith(os.path.normcase(root) + os.sep):
+                return os.path.relpath(abspath, os.path.dirname(root))
+
+        return ""
+
+    def create_item_data(self, item: dict) -> Optional[dict]:
+        """Describes a single item for the browser, which builds the card from it.
+
+        Holds the same information as the HTML made by `create_item_html`, minus everything that
+        depends on the tab the card is shown in. Returns None if the item is not meant to be shown.
+        """
+        search_only = self.is_search_only(item)
+        if search_only and shared.opts.extra_networks_hidden_models == "Never":
+            return None
+
+        data = {
+            "name": item["name"],
+            "filename": item.get("filename", "") or "",
+            "shorthash": item.get("shorthash", "") or "",
+            "preview": item.get("preview", None) or None,
+            "description": (item.get("description", "") or "") if shared.opts.extra_networks_card_show_desc else "",
+            "search_terms": [str(x) for x in item.get("search_terms", [])],
+            "search_only": search_only,
+            "sort_keys": item.get("sort_keys", {}),
+            "has_metadata": bool(item.get("metadata")),
+            "tree_path": self.tree_path(item.get("filename", "")),
+        }
+
+        onclick = item.get("onclick", None)
+        if onclick is not None:
+            # stored escaped for use inside an HTML attribute; the browser sets the attribute directly
+            data["onclick"] = html.unescape(onclick)
+        else:
+            # these two are javascript expressions, not text
+            data["prompt"] = item["prompt"]
+            data["negative_prompt"] = item.get("negative_prompt", "''")
+
+        return data
+
+    def create_items_data(self) -> dict:
+        """Lists the items anew and returns everything the browser needs to show this page, in any tab."""
+        with self.items_lock:
+            self.refresh_items()
+            items = [self.create_item_data(item) for item in self.items.values()]
+
+        style_height = f"height: {shared.opts.extra_networks_card_height}px;" if shared.opts.extra_networks_card_height else ''
+        style_width = f"width: {shared.opts.extra_networks_card_width}px;" if shared.opts.extra_networks_card_width else ''
+        style_font_size = f"font-size: {shared.opts.extra_networks_card_text_scale*100}%;"
+
+        dirs = "".join([f"<li>{html.escape(x)}</li>" for x in self.allowed_directories_for_previews()])
+
+        return {
+            "page": self.name,
+            "extra_networks_tabname": self.extra_networks_tabname,
+            "items": [x for x in items if x is not None],
+            "allow_negative_prompt": bool(self.allow_negative_prompt),
+            "card_style": style_height + style_width + style_font_size,
+            "description_is_html": bool(shared.opts.extra_networks_card_description_is_html),
+            "dirs": self.list_subdirs() if shared.opts.extra_networks_tree_view_style != "Tree" else [],
+            "no_cards_html": shared.html("extra-networks-no-cards.html").format(dirs=dirs),
+            "path_separator": os.sep,
+        }
+
     def create_html(self, tabname, *, empty=False):
         """Generates an HTML string for the current pane.
 
         The generated HTML uses `extra-networks-pane.html` as a template.
 
+        Only the frame of the pane is made here: controls plus empty containers. Cards, and the
+        directory view next to them, are built in the browser from `create_items_data()`, which is
+        what keeps pages with thousands of items responsive. The result does not depend on the
+        items, so setting it again on the gradio component leaves the page alone.
+
         Args:
             tabname: The name of the active tab.
-            empty: create an empty HTML page with no items
+            empty: unused; kept for compatibility.
 
         Returns:
             HTML formatted string.
         """
-        self.lister.reset()
-        self.metadata = {}
-
-        items_list = [] if empty else self.list_items()
-        self.items = {x["name"]: x for x in items_list}
-
-        # Populate the instance metadata for each item.
-        for item in self.items.values():
-            metadata = item.get("metadata")
-            if metadata:
-                self.metadata[item["name"]] = metadata
-
-            if "user_metadata" not in item:
-                self.read_user_metadata(item)
-
         show_tree = shared.opts.extra_networks_tree_view_default_enabled
 
         page_params = {
@@ -608,15 +816,15 @@ class ExtraNetworksPage:
             "sort_date_created_active": ' extra-network-control--enabled' if shared.opts.extra_networks_card_order_field == 'Date Created' else '',
             "sort_date_modified_active": ' extra-network-control--enabled' if shared.opts.extra_networks_card_order_field == 'Date Modified' else '',
             "tree_view_btn_extra_class": "extra-network-control--enabled" if show_tree else "",
-            "items_html": self.create_card_view_html(tabname, none_message="Loading..." if empty else None),
+            "items_html": "<div class='extra-network-cards-status'>Loading...</div>",
             "extra_networks_tree_view_default_width": shared.opts.extra_networks_tree_view_default_width,
             "tree_view_div_default_display_class": "" if show_tree else "extra-network-dirs-hidden",
         }
 
         if shared.opts.extra_networks_tree_view_style == "Tree":
-            pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html=self.create_tree_view_html(tabname))
+            pane_content = self.pane_content_tree_tpl.format(**page_params, tree_html="")
         else:
-            pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html=self.create_dirs_view_html(tabname))
+            pane_content = self.pane_content_dirs_tpl.format(**page_params, dirs_html="")
 
         return self.pane_tpl.format(**page_params, pane_content=pane_content)
 
@@ -636,8 +844,9 @@ class ExtraNetworksPage:
         pth = Path(path)
         mtime, ctime = self.lister.mctime(path)
         return {
-            "date_created": int(mtime),
-            "date_modified": int(ctime),
+            # ctime is the creation time on Windows; elsewhere it is the closest thing there is to one
+            "date_created": int(ctime),
+            "date_modified": int(mtime),
             "name": pth.name.lower(),
             "path": str(pth).lower(),
         }
@@ -645,15 +854,27 @@ class ExtraNetworksPage:
     def find_preview(self, path):
         """
         Find a preview PNG for a given path (without extension) and call link_preview on it.
+
+        If there are previews in several formats, the most recently modified one is used; that is the
+        one "Replace preview" has just written. Between equally old ones the order of extensions decides.
         """
 
-        potential_files = sum([[f"{path}.{ext}", f"{path}.preview.{ext}"] for ext in allowed_preview_extensions()], [])
+        # allowed_preview_extensions() is a set: iterating it directly gives a different order on every launch
+        extensions = sorted(allowed_preview_extensions(), key=lambda x: (default_allowed_preview_extensions.index(x) if x in default_allowed_preview_extensions else len(default_allowed_preview_extensions), x))
+        potential_files = sum([[f"{path}.{ext}", f"{path}.preview.{ext}"] for ext in extensions], [])
 
+        newest_file = None
+        newest_mtime = None
         for file in potential_files:
-            if self.lister.exists(file):
-                return self.link_preview(file)
+            stats = self.lister.find(file)
+            if stats is None:
+                continue
 
-        return None
+            if newest_file is None or stats[1] > newest_mtime:
+                newest_file = file
+                newest_mtime = stats[1]
+
+        return self.link_preview(newest_file) if newest_file is not None else None
 
     def find_embedded_preview(self, path, name, metadata):
         """
@@ -662,7 +883,9 @@ class ExtraNetworksPage:
 
         file = f"{path}.safetensors"
         if self.lister.exists(file) and 'ssmd_cover_images' in metadata and len(list(filter(None, json.loads(metadata['ssmd_cover_images'])))) > 0:
-            return f"./sd_extra_networks/cover-images?page={self.extra_networks_tabname}&item={name}"
+            mtime, _ = self.lister.mctime(file)
+            quoted_name = urllib.parse.quote(name, safe="")
+            return f"./sd_extra_networks/cover-images?page={self.extra_networks_tabname}&item={quoted_name}&mtime={mtime}&t={ui_extra_networks_thumbnails.settings_signature()}"
 
         return None
 
@@ -771,21 +994,10 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
         def refresh():
             for pg in ui.stored_extra_pages:
                 pg.refresh()
-            create_html()
-            return ui.pages_contents
 
+        # The pages themselves are not outputs: the browser asks for the items again once the lists are refreshed.
         button_refresh = gr.Button("Refresh", elem_id=f"{tabname}_{page.extra_networks_tabname}_extra_refresh_internal", visible=False)
-        button_refresh.click(fn=refresh, inputs=[], outputs=ui.pages).then(fn=lambda: None, _js="function(){ " + f"applyExtraNetworkFilter('{tabname}_{page.extra_networks_tabname}');" + " }").then(fn=lambda: None, _js='setupAllResizeHandles')
-
-    def create_html():
-        ui.pages_contents = [pg.create_html(ui.tabname) for pg in ui.stored_extra_pages]
-
-    def pages_html():
-        if not ui.pages_contents:
-            create_html()
-        return ui.pages_contents
-
-    interface.load(fn=pages_html, inputs=[], outputs=ui.pages).then(fn=lambda: None, _js='setupAllResizeHandles')
+        button_refresh.click(fn=refresh, inputs=[], outputs=[]).then(fn=None, _js="function(){ extraNetworksReloadItems(); }", inputs=[], outputs=[])
 
     return ui
 
@@ -803,7 +1015,7 @@ def setup_ui(ui, gallery):
 
         if len(images) == 0:
             print("There is no image in gallery to save as a preview.")
-            return [page.create_html(ui.tabname) for page in ui.stored_extra_pages]
+            return
 
         index = int(index)
         index = 0 if index < 0 else index
@@ -823,14 +1035,12 @@ def setup_ui(ui, gallery):
 
         save_image_with_geninfo(image, geninfo, filename)
 
-        return [page.create_html(ui.tabname) for page in ui.stored_extra_pages]
-
     ui.button_save_preview.click(
         fn=save_preview,
         _js="function(x, y, z){return [selected_gallery_index(), y, z]}",
         inputs=[ui.preview_target_filename, gallery, ui.preview_target_filename],
-        outputs=[*ui.pages]
-    )
+        outputs=[]
+    ).then(fn=None, _js="function(){ extraNetworksReloadItems(); }", inputs=[], outputs=[])
 
     for editor in ui.user_metadata_editors:
         editor.setup_ui(gallery)

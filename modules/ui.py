@@ -883,6 +883,11 @@ def create_ui():
             with gr.Column(variant='panel'):
                 image = gr.Image(elem_id="pnginfo_image", label="Source", source="upload", interactive=True, type="pil", image_mode="RGBA")
 
+                # Used by the "send preview to PNG Info" button of Extra Networks cards.
+                extra_networks_preview_source = gr.Textbox(visible=False, label="Extra networks preview source", elem_id="pnginfo_extra_networks_source")
+                extra_networks_preview_source.do_not_save_to_config = True
+                extra_networks_preview_send = gr.Button("Send extra networks preview", visible=False, elem_id="pnginfo_extra_networks_send")
+
             with gr.Column(variant='panel'):
                 html = gr.HTML()
                 generation_info = gr.Textbox(visible=False, elem_id="pnginfo_generation_info")
@@ -899,6 +904,14 @@ def create_ui():
             fn=wrap_gradio_call_no_job(modules.extras.run_pnginfo),
             inputs=[image],
             outputs=[html, generation_info, html2],
+        )
+
+        # Setting the image triggers image.change above, the same as an upload does.
+        extra_networks_preview_send.click(
+            fn=ui_extra_networks.load_preview_for_pnginfo,
+            inputs=[extra_networks_preview_source],
+            outputs=[image],
+            show_progress=False,
         )
 
     modelmerger_ui = ui_checkpoint_merger.UiCheckpointMerger()
