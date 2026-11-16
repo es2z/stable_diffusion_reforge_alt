@@ -1939,10 +1939,22 @@ function extraNetworksControlClearUsageOnClick(
     tabname,
     extra_networks_tabname
 ) {
-    // 確認ダイアログ(既定では無効)。有効にする場合は次の3行のコメントを外してください。
-    // if (!confirm("Clear the usage counts of all cards on this page?")) {
-    //     return;
-    // }
+    // All cards of the page at once: asked first.
+    var data = ExtraNetworksData.get(extra_networks_tabname);
+    var used = data
+        ? data.items.filter(function (item) {
+            return item.usage_count > 0;
+        }).length
+        : 0;
+    if (
+        !confirm(
+            "Clear the usage counts of all cards on this page (" +
+                used +
+                " with a count)?\nFavorites are kept."
+        )
+    ) {
+        return;
+    }
 
     extraNetworksPostJson(
         "./sd_extra_networks/clear-usage",
