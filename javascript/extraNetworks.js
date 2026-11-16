@@ -169,6 +169,51 @@ var ExtraNetworksData = (function () {
 
         updateItem: updateItem,
 
+        /**
+         * Sets usage counts and favourites from {name: {count, last_used, favorite}}.
+         * complete: the map holds every item that has any; the others are reset.
+         */
+        applyStats: function (pageName, stats, complete) {
+            var page = entry(pageName);
+            if (!page.data) return;
+
+            page.data.items.forEach(function (item) {
+                var itemStats = stats[item.name];
+                if (!itemStats) {
+                    if (!complete) return;
+                    itemStats = { count: 0, last_used: 0, favorite: false };
+                }
+
+                item.usage_count = itemStats.count;
+                item.last_used = itemStats.last_used;
+                item.favorite = itemStats.favorite;
+                item.sort_keys = item.sort_keys || {};
+                item.sort_keys.usage_count = itemStats.count;
+                item.sort_keys.last_used = itemStats.last_used;
+            });
+
+            notify(page, "ready");
+        },
+
+        /**
+         * Fetches usage counts again; they change whenever an image is generated.
+         */
+        refreshStats: function (pageName) {
+            var self = this;
+            if (!entry(pageName).data) return;
+
+            requestGet(
+                "./sd_extra_networks/stats",
+                { page: pageName },
+                function (data) {
+                    if (data && data.stats) {
+                        self.applyStats(pageName, data.stats, true);
+                    }
+                },
+                function () {}
+            );
+        },
+
         /** Returns what the server sent for the page, or null while it is not loaded. */
         get: function (pageName) {
             return entry(pageName).data;
@@ -231,7 +276,12 @@ var ExtraNetworksGrid = (function () {
         return preview + "&full=1";
     }
 
-    function compareBy(sortKey) {
+    // Sort keys whose natural order is "largest first": the most used and the most recently used on top.
+    var LARGEST_FIRST = { usage_count: true, last_used: true };
+
+    function compareBy(sortKey, descending) {
+        var direction = (descending ? -1 : 1) * (LARGEST_FIRST[sortKey] ? -1 : 1);
+
         return function (a, b) {
             var av = a.sort_keys ? a.sort_keys[sortKey] : undefined;
             var bv = b.sort_keys ? b.sort_keys[sortKey] : undefined;
@@ -247,8 +297,27 @@ var ExtraNetworksGrid = (function () {
                 result = av < bv ? -1 : av > bv ? 1 : 0;
             }
 
-            return result || a.index - b.index;
+            // equal items keep their original order, whatever the direction
+            return direction * result || a.index - b.index;
         };
+    }
+
+    function formatTime(timestamp) {
+        var d = new Date(timestamp * 1000);
+        var pad = function (n) {
+            return (n < 10 ? "0" : "") + n;
+        };
+        return (
+            d.getFullYear() +
+            "-" +
+            pad(d.getMonth() + 1) +
+            "-" +
+            pad(d.getDate()) +
+            " " +
+            pad(d.getHours()) +
+            ":" +
+            pad(d.getMinutes())
+        );
     }
 
     function Grid(tabname, pageName) {
@@ -263,6 +332,7 @@ var ExtraNetworksGrid = (function () {
             useRegex: false,
             sortKey: "default",
             descending: false,
+            favoritesOnly: false,
         };
         this.viewKey = null;
 
@@ -394,13 +464,13 @@ var ExtraNetworksGrid = (function () {
             }
 
             var items = this.data.items.filter(function (item) {
+                if (view.favoritesOnly && !item.favorite) return false;
                 // items in hidden directories only show up when searched for
                 if (item.search_only && term.length < 4) return false;
                 return matches(item.searchText);
             });
 
-            items.sort(compareBy(view.sortKey));
-            if (view.descending) items.reverse();
+            items.sort(compareBy(view.sortKey, view.descending));
 
             this.visibleItems = items;
             this.measured = false; // options that set the card size arrive with the data
@@ -587,7 +657,7 @@ var ExtraNetworksGrid = (function () {
             var tabname = this.tabname;
             var pageName = this.pageName;
 
-            var card = el("div", "card");
+            var card = el("div", item.favorite ? "card favorite" : "card");
             if (data.card_style) card.setAttribute("style", data.card_style);
             card.setAttribute("data-name", item.name);
             Object.keys(item.sort_keys || {}).forEach(function (key) {
@@ -636,7 +706,29 @@ var ExtraNetworksGrid = (function () {
                 card.appendChild(imageButtons);
             }
 
+            // In the corner of its own: it stays visible on a favourite, on other cards it shows up while hovering.
+            card.appendChild(
+                cardButton(
+                    "div",
+                    "favorite-button",
+                    item.favorite ? "Remove from favorites" : "Add to favorites",
+                    "extraNetworksToggleFavorite(event, '" + pageName + "')"
+                )
+            );
+
             var buttons = el("div", "button-row");
+            if (item.usage_count > 0) {
+                buttons.appendChild(
+                    cardButton(
+                        "div",
+                        "clear-usage-button",
+                        "Clear usage count of this card (" +
+                            item.usage_count +
+                            ")",
+                        "extraNetworksClearUsage(event, '" + pageName + "')"
+                    )
+                );
+            }
             var copyPath = cardButton(
                 "div",
                 "copy-path-button",
@@ -672,6 +764,19 @@ var ExtraNetworksGrid = (function () {
             card.appendChild(buttons);
 
             var actions = el("div", "actions");
+            if (item.usage_count > 0) {
+                var usage = el("span", "usage-count");
+                usage.textContent = "\u00d7" + item.usage_count;
+                usage.title =
+                    "Used " +
+                    item.usage_count +
+                    " time" +
+                    (item.usage_count == 1 ? "" : "s") +
+                    (item.last_used
+                        ? ", last on " + formatTime(item.last_used)
+                        : "");
+                actions.appendChild(usage);
+            }
             var additional = el("div", "additional");
             (item.search_terms || []).forEach(function (term) {
                 var span = el(
@@ -1150,6 +1255,10 @@ function setupExtraNetworksForTab(tabname) {
                         "_controls .extra-network-control--sort.extra-network-control--enabled"
                 );
 
+                var favorites = gradioApp().querySelector(
+                    "#" + tabname_full + "_extra_favorites"
+                );
+
                 grid.setView({
                     term: search.value,
                     useRegex: !!(regexCheckbox && regexCheckbox.checked),
@@ -1157,6 +1266,12 @@ function setupExtraNetworksForTab(tabname) {
                         ? activeSortElem.dataset.sortkey
                         : "default",
                     descending: sort_dir.dataset.sortdir == "Descending",
+                    favoritesOnly: !!(
+                        favorites &&
+                        favorites.classList.contains(
+                            "extra-network-control--enabled"
+                        )
+                    ),
                 });
             };
 
@@ -1267,6 +1382,11 @@ function extraNetworksTabSelected(
 ) {
     extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
     extraNetworksShowControlsForPage(tabname, tabname_full);
+
+    // usage counts change while generating; opening the page is when they get looked at
+    if (tabname_full) {
+        ExtraNetworksData.refreshStats(tabname_full.slice(tabname.length + 1));
+    }
 }
 
 function applyExtraNetworkFilter(tabname_full) {
@@ -1569,6 +1689,114 @@ function extraNetworksControlSortOnClick(
     self.classList.add("extra-network-control--enabled");
 
     applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+
+    if (
+        self.dataset.sortkey == "usage_count" ||
+        self.dataset.sortkey == "last_used"
+    ) {
+        // counted on the server while generating; get the current numbers
+        ExtraNetworksData.refreshStats(extra_networks_tabname);
+    }
+}
+
+function extraNetworksControlFavoritesOnClick(
+    event,
+    tabname,
+    extra_networks_tabname
+) {
+    event.currentTarget.classList.toggle("extra-network-control--enabled");
+    applyExtraNetworkFilter(tabname + "_" + extra_networks_tabname);
+}
+
+function extraNetworksPostJson(url, body, handler) {
+    fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    })
+        .then(function (response) {
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            return response.json();
+        })
+        .then(handler)
+        .catch(function (error) {
+            console.error("Extra Networks:", url, error);
+        });
+}
+
+/**
+ * Controls button: forgets the usage counts of all cards of the page. Favourites are kept.
+ * The server keeps the previous numbers in extra_networks_stats.json.bak.
+ */
+function extraNetworksControlClearUsageOnClick(
+    event,
+    tabname,
+    extra_networks_tabname
+) {
+    // 確認ダイアログ(既定では無効)。有効にする場合は次の3行のコメントを外してください。
+    // if (!confirm("Clear the usage counts of all cards on this page?")) {
+    //     return;
+    // }
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/clear-usage",
+        { page: extra_networks_tabname, name: "" },
+        function (data) {
+            ExtraNetworksData.applyStats(
+                extra_networks_tabname,
+                data.stats || {},
+                true
+            );
+        }
+    );
+}
+
+/**
+ * Card button: forgets the usage count of this card only.
+ */
+function extraNetworksClearUsage(event, extra_networks_tabname) {
+    event.stopPropagation();
+
+    var name =
+        event.target.parentElement.parentElement.getAttribute("data-name");
+
+    // 確認ダイアログ(既定では無効)。有効にする場合は次の3行のコメントを外してください。
+    // if (!confirm("Clear the usage count of " + name + "?")) {
+    //     return;
+    // }
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/clear-usage",
+        { page: extra_networks_tabname, name: name },
+        function (data) {
+            ExtraNetworksData.applyStats(
+                extra_networks_tabname,
+                data.stats || {},
+                true
+            );
+        }
+    );
+}
+
+/**
+ * Card button: adds the card to the favourites, or removes it.
+ */
+function extraNetworksToggleFavorite(event, extra_networks_tabname) {
+    event.stopPropagation();
+
+    var name = event.target.closest(".card").getAttribute("data-name");
+    var item = ExtraNetworksData.getItem(extra_networks_tabname, name);
+    if (!item) return;
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/favorite",
+        { page: extra_networks_tabname, name: name, favorite: !item.favorite },
+        function (data) {
+            var stats = {};
+            stats[name] = data.stats;
+            ExtraNetworksData.applyStats(extra_networks_tabname, stats, false);
+        }
+    );
 }
 
 function extraNetworksControlSortDirOnClick(

@@ -1,4 +1,4 @@
-from modules import extra_networks, shared
+from modules import extra_networks, shared, ui_extra_networks_stats
 import networks
 
 
@@ -43,6 +43,10 @@ class ExtraNetworkLora(extra_networks.ExtraNetwork):
             dyn_dims.append(dyn_dim)
 
         networks.load_networks(names, te_multipliers, unet_multipliers, dyn_dims)
+
+        # usage count shown on the cards; counts whatever the generation uses, however it got into the prompt
+        for item in networks.loaded_networks:
+            ui_extra_networks_stats.record_use_once(p, "lora", item.network_on_disk.name)
 
         if shared.opts.lora_add_hashes_to_infotext:
             if not getattr(p, "is_hr_pass", False) or not hasattr(p, "lora_hashes"):

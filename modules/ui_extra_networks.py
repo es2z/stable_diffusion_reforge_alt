@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Optional, Union
 from dataclasses import dataclass
 
-from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, errors, extra_networks, util
+from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, ui_extra_networks_stats, errors, extra_networks, util
 from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
 import html
+from fastapi import Body
 from fastapi.exceptions import HTTPException
 from PIL import Image
 
@@ -251,6 +252,45 @@ def get_items(page: str = ""):
     return JSONResponse(page.create_items_data())
 
 
+def get_stats(page: str = ""):
+    """Usage counts and favourites of a page, for refreshing cards without listing the files again."""
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get_page(page.name)})
+
+
+def set_favorite(page: str = Body("", embed=True), name: str = Body("", embed=True), favorite: bool = Body(False, embed=True)):
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None or not name:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    ui_extra_networks_stats.set_favorite(page.name, name, favorite)
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get(page.name, name)})
+
+
+def clear_usage(page: str = Body("", embed=True), name: str = Body("", embed=True)):
+    """Forgets the usage of one item, or of all items of the page if no name is given."""
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    if name:
+        ui_extra_networks_stats.clear_usage(page.name, name)
+    else:
+        ui_extra_networks_stats.clear_page_usage(page.name)
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get_page(page.name)})
+
+
 def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     from starlette.responses import JSONResponse
 
@@ -285,6 +325,9 @@ def add_pages_to_demo(app):
     app.add_api_route("/sd_extra_networks/metadata", get_metadata, methods=["GET"])
     app.add_api_route("/sd_extra_networks/items", get_items, methods=["GET"])
     app.add_api_route("/sd_extra_networks/get-single-card", get_single_card, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/stats", get_stats, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/favorite", set_favorite, methods=["POST"])
+    app.add_api_route("/sd_extra_networks/clear-usage", clear_usage, methods=["POST"])
 
 
 def quote_js(s: str):
@@ -740,6 +783,8 @@ class ExtraNetworksPage:
         if search_only and shared.opts.extra_networks_hidden_models == "Never":
             return None
 
+        stats = ui_extra_networks_stats.get(self.name, item["name"])
+
         data = {
             "name": item["name"],
             "filename": item.get("filename", "") or "",
@@ -748,9 +793,12 @@ class ExtraNetworksPage:
             "description": (item.get("description", "") or "") if shared.opts.extra_networks_card_show_desc else "",
             "search_terms": [str(x) for x in item.get("search_terms", [])],
             "search_only": search_only,
-            "sort_keys": item.get("sort_keys", {}),
+            "sort_keys": {**item.get("sort_keys", {}), "usage_count": stats["count"], "last_used": stats["last_used"]},
             "has_metadata": bool(item.get("metadata")),
             "tree_path": self.tree_path(item.get("filename", "")),
+            "usage_count": stats["count"],
+            "last_used": stats["last_used"],
+            "favorite": stats["favorite"],
         }
 
         onclick = item.get("onclick", None)

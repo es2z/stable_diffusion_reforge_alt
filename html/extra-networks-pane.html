@@ -54,6 +54,24 @@
         >
             <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
         </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_usage_count"
+            class="extra-network-control--sort"
+            data-sortkey="usage_count"
+            title="Sort by usage count (most used first)"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_last_used"
+            class="extra-network-control--sort"
+            data-sortkey="last_used"
+            title="Sort by last use (most recent first)"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
 
         <small> </small>
         <div
@@ -68,6 +86,22 @@
 
 
         <small> </small>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_favorites"
+            class="extra-network-control--favorites"
+            title="Show favorites only"
+            onclick="extraNetworksControlFavoritesOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--favorites-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_clear_usage"
+            class="extra-network-control--clear-usage"
+            title="Clear the usage counts of all cards on this page"
+            onclick="extraNetworksControlClearUsageOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--clear-usage-icon"></i>
+        </div>
         <div
             id="{tabname}_{extra_networks_tabname}_extra_tree_view"
             class="extra-network-control--tree-view {tree_view_btn_extra_class}"

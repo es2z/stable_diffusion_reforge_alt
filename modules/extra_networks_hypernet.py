@@ -1,4 +1,4 @@
-from modules import extra_networks, shared
+from modules import extra_networks, shared, ui_extra_networks_stats
 from modules.hypernetworks import hypernetwork
 
 
@@ -23,6 +23,9 @@ class ExtraNetworkHypernet(extra_networks.ExtraNetwork):
             multipliers.append(float(params.items[1]) if len(params.items) > 1 else 1.0)
 
         hypernetwork.load_hypernetworks(names, multipliers)
+
+        for name in names:
+            ui_extra_networks_stats.record_use_once(p, "hypernetworks", name)
 
     def deactivate(self, p):
         pass

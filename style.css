@@ -1285,10 +1285,11 @@ body.resizing .resize-handle {
 /* Buttons for the image behind a card's preview; shown on hover, opposite of the model's buttons. */
 .extra-network-pane .card .image-button-row {
     display: inline-flex;
+    flex-direction: column;
     visibility: hidden;
     position: absolute;
-    left: 0;
-    top: 0;
+    left: 0.25rem;
+    top: 3rem;
     z-index: 1;
 }
 
@@ -1300,7 +1301,7 @@ body.resizing .resize-handle {
     display: block;
     width: 1.5rem;
     height: 1.5rem;
-    margin: 0.35rem 0 0 0.35rem;
+    margin: 0 0 0.5rem 0.35rem;
     padding: 0;
     background-color: white;
     opacity: 0.75;
@@ -1638,6 +1639,86 @@ body.resizing .resize-handle {
 
 .extra-network-control .extra-network-control--sort-dir[data-sortdir="Descending"] .extra-network-control--sort-dir-icon {
     mask-image: url('data:image/svg+xml,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M13 12H21M13 8H21M13 16H21M6 7V17M6 17L3 14M6 17L9 14" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></g></svg>');
+}
+
+/* ==== USAGE AND FAVOURITES ==== */
+.extra-network-control .extra-network-control--sort[data-sortkey="usage_count"] .extra-network-control--sort-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11M12 20V4M19 20v-6"/></svg>');
+}
+
+.extra-network-control .extra-network-control--sort[data-sortkey="last_used"] .extra-network-control--sort-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>');
+}
+
+.extra-network-control .extra-network-control--favorites,
+.extra-network-control .extra-network-control--clear-usage {
+    padding: 0.25rem;
+    display: inline-flex;
+    cursor: pointer;
+    justify-self: center;
+    align-self: center;
+}
+
+.extra-network-control .extra-network-control--favorites-icon,
+.extra-network-control .extra-network-control--clear-usage-icon {
+    height: 1.5rem;
+    width: 1.5rem;
+    mask-repeat: no-repeat;
+    mask-position: center center;
+    mask-size: 100%;
+    background-color: var(--input-placeholder-color);
+}
+
+.extra-network-control .extra-network-control--favorites-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 17l-5.4 2.8 1.1-6.1L3.2 9.4l6.1-.8z"/></svg>');
+}
+
+.extra-network-control .extra-network-control--clear-usage-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v5h5"/><path d="M10 15V11M13.5 15V9"/></svg>');
+}
+
+.extra-network-control .extra-network-control--clear-usage:active .extra-network-control--clear-usage-icon {
+    background-color: var(--button-secondary-text-color);
+}
+
+.extra-network-pane .card .favorite-button::before {
+    content: "☆";
+}
+
+.extra-network-pane .card.favorite .favorite-button::before {
+    content: "★";
+}
+
+.extra-network-pane .card > .favorite-button {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 1;
+    visibility: hidden;
+}
+
+/* the star of a favourite is always there; on other cards it shows while hovering */
+.extra-network-pane .card:hover > .favorite-button,
+.extra-network-pane .card.favorite > .favorite-button {
+    visibility: visible;
+}
+
+.extra-network-pane .card.favorite > .favorite-button {
+    color: #ffd24a;
+}
+
+.extra-network-pane .card .clear-usage-button::before {
+    content: "↺";
+}
+
+.extra-network-pane .card .actions .usage-count {
+    float: right;
+    margin-left: 0.5em;
+    font-size: 1.2em;
+    font-weight: 600;
+    line-height: 1.5;
+    opacity: 0.9;
+    cursor: default;
 }
 
 /* ==== TREE VIEW ICON ACTIONS ==== */
