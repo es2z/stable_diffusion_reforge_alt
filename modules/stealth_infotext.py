@@ -55,6 +55,11 @@ def add_data(params, mode='Alpha', compressed=True):
             break
 
 def read_info_from_image_stealth(image):
+    # Hidden infotext only exists in the lowest bits of RGB / RGBA pixels. Other modes have nothing
+    # to read, and their pixels are not tuples the loop below could unpack.
+    if image.mode not in ('RGB', 'RGBA'):
+        return None
+
     width, height = image.size
     pixels = image.load()
 
@@ -111,6 +116,12 @@ def read_info_from_image_stealth(image):
                             compressed = True
                         buffer_rgb = ''
                         index_rgb = 0
+                    elif not has_alpha:
+                        # No signature in the RGB bits, and without an alpha channel there is no
+                        # other place for one. Without this the loop went on over every pixel of
+                        # the image - seconds of work for each image that has no hidden infotext.
+                        read_end = True
+                        break
             elif reading_param_len:
                 if mode == 'alpha':
                     if index_a == 32:

@@ -178,27 +178,33 @@ def _cached_thumbnail(identity: str, version: str, open_source, source_bytes=Non
             _serve_original.add(key)
             return None
 
-        os.makedirs(directory, exist_ok=True)
+        try:
+            os.makedirs(directory, exist_ok=True)
 
-        # Only one thumbnail is kept per source.
-        for name in os.listdir(directory):
-            if name.startswith(identity_hash + "_") and name.endswith(".jpg"):
+            # Only one thumbnail is kept per source.
+            for name in os.listdir(directory):
+                if name.startswith(identity_hash + "_") and name.endswith(".jpg"):
+                    try:
+                        os.remove(os.path.join(directory, name))
+                    except OSError:
+                        pass
+
+            fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as file:
+                    file.write(data)
+                os.replace(tmp_path, path)
+            except Exception:
                 try:
-                    os.remove(os.path.join(directory, name))
+                    os.remove(tmp_path)
                 except OSError:
                     pass
-
-        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "wb") as file:
-                file.write(data)
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            raise
+                raise
+        except Exception as e:
+            # a cache that can not be written must not take the previews away: the original is shown instead
+            print(f"Extra Networks: could not store thumbnail for {identity}: {e}")
+            _serve_original.add(key)
+            return None
 
     return path
 
