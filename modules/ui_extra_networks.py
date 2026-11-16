@@ -145,7 +145,7 @@ def get_cover_image(page: str = "", item: str = "", index: int = 0):
     if metadata is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    cover_images = json.loads(metadata.get('ssmd_cover_images', {}))
+    cover_images = json.loads(metadata.get('ssmd_cover_images') or '[]')
     image = cover_images[index] if index < len(cover_images) else None
     if not image:
         raise HTTPException(status_code=404, detail="File not found")
@@ -262,10 +262,15 @@ def get_single_card(page: str = "", tabname: str = "", name: str = ""):
 
     try:
         item = page.create_item(name, enable_filter=False)
-        page.items[name] = item
+        if item is not None:
+            page.items[name] = item
     except Exception as e:
         errors.display(e, "creating item for extra network")
         item = page.items.get(name)
+
+    if item is None:
+        # no such item (anymore); the browser reloads the whole list when it gets this
+        raise HTTPException(status_code=404, detail="Item not found")
 
     page.read_user_metadata(item, use_cache=False)
     item_html = page.create_item_html(tabname, item, shared.html("extra-networks-card.html"))
@@ -839,8 +844,9 @@ class ExtraNetworksPage:
         pth = Path(path)
         mtime, ctime = self.lister.mctime(path)
         return {
-            "date_created": int(mtime),
-            "date_modified": int(ctime),
+            # ctime is the creation time on Windows; elsewhere it is the closest thing there is to one
+            "date_created": int(ctime),
+            "date_modified": int(mtime),
             "name": pth.name.lower(),
             "path": str(pth).lower(),
         }
@@ -848,15 +854,27 @@ class ExtraNetworksPage:
     def find_preview(self, path):
         """
         Find a preview PNG for a given path (without extension) and call link_preview on it.
+
+        If there are previews in several formats, the most recently modified one is used; that is the
+        one "Replace preview" has just written. Between equally old ones the order of extensions decides.
         """
 
-        potential_files = sum([[f"{path}.{ext}", f"{path}.preview.{ext}"] for ext in allowed_preview_extensions()], [])
+        # allowed_preview_extensions() is a set: iterating it directly gives a different order on every launch
+        extensions = sorted(allowed_preview_extensions(), key=lambda x: (default_allowed_preview_extensions.index(x) if x in default_allowed_preview_extensions else len(default_allowed_preview_extensions), x))
+        potential_files = sum([[f"{path}.{ext}", f"{path}.preview.{ext}"] for ext in extensions], [])
 
+        newest_file = None
+        newest_mtime = None
         for file in potential_files:
-            if self.lister.exists(file):
-                return self.link_preview(file)
+            stats = self.lister.find(file)
+            if stats is None:
+                continue
 
-        return None
+            if newest_file is None or stats[1] > newest_mtime:
+                newest_file = file
+                newest_mtime = stats[1]
+
+        return self.link_preview(newest_file) if newest_file is not None else None
 
     def find_embedded_preview(self, path, name, metadata):
         """
