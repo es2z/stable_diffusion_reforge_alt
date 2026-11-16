@@ -3,6 +3,7 @@ from ldm_patched.modules.conds import CONDRegular, CONDCrossAttn
 from ldm_patched.modules.samplers import sampling_function
 from ldm_patched.modules import model_management
 from ldm_patched.modules.ops import cleanup_cache
+from modules_forge import lora_schedule
 
 
 def cond_from_a1111_to_patched_ldm(cond):
@@ -100,6 +101,8 @@ def forge_sample(self, denoiser_params, cond_scale, cond_composition):
         model_options['mask'] = mask
         model_options['init_latent'] = init_latent
 
+    lora_schedule.before_step(self)
+
     for modifier in model_options.get('conditioning_modifiers', []):
         model, x, timestep, uncond, cond, cond_scale, model_options, seed = modifier(model, x, timestep, uncond, cond, cond_scale, model_options, seed)
 
@@ -114,6 +117,7 @@ def forge_sample(self, denoiser_params, cond_scale, cond_composition):
 
 
 def sampling_prepare(unet, x):
+    lora_schedule.finish()
     B, C, H, W = x.shape
 
     memory_estimation_function = unet.model_options.get('memory_peak_estimation_modifier', unet.memory_required)
@@ -141,6 +145,7 @@ def sampling_prepare(unet, x):
 
 
 def sampling_cleanup(unet):
+    lora_schedule.finish()
     for cnet in unet.list_controlnets():
         cnet.cleanup()
     cleanup_cache()

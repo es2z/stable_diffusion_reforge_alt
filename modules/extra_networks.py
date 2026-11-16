@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import re
@@ -33,6 +34,8 @@ class ExtraNetworkParams:
         self.items = items or []
         self.positional = []
         self.named = {}
+        self.source_prompt = None
+        self.source_index = None
 
         for item in self.items:
             parts = item.split('=', 2) if isinstance(item, str) else [item]
@@ -177,12 +180,20 @@ re_extra_net = re.compile(r"<(\w+):([^>]+)>")
 
 def parse_prompt(prompt):
     res = defaultdict(list)
+    source_prompt = prompt
+    count = itertools.count()
 
     def found(m):
         name = m.group(1)
         args = m.group(2)
 
-        res[name].append(ExtraNetworkParams(items=args.split(":")))
+        params = ExtraNetworkParams(items=args.split(":"))
+
+        # where the tag stood (nth tag of which prompt), for networks that care about the brackets around it
+        params.source_prompt = source_prompt
+        params.source_index = next(count)
+
+        res[name].append(params)
 
         return ""
 

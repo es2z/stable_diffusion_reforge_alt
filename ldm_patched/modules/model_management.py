@@ -575,8 +575,15 @@ def extra_reserved_memory():
 def minimum_inference_memory():
     return (1024 * 1024 * 1024) * 0.8 + extra_reserved_memory()
 
+memory_pressure_callbacks = []
+"""functions(device) that drop caches which can be rebuilt; called before models are unloaded to make room"""
+
+
 def free_memory(memory_required, device, keep_loaded=[]):
     cleanup_models_gc()
+    if memory_pressure_callbacks and get_free_memory(device) < memory_required:
+        for callback in list(memory_pressure_callbacks):
+            callback(device)
     unloaded_model = []
     can_unload = []
     unloaded_models = []
