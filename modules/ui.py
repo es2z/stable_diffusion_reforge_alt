@@ -13,7 +13,7 @@ from PIL import Image, PngImagePlugin  # noqa: F401
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call, wrap_gradio_call_no_job # noqa: F401
 
 from modules import gradio_extensons, sd_schedulers  # noqa: F401
-from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_toprow, launch_utils
+from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_output_browser, ui_toprow, launch_utils
 from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML, InputAccordion, ResizeHandleRow
 from modules.paths import script_path
 from modules.ui_common import create_refresh_button
@@ -936,6 +936,8 @@ def create_ui():
             show_progress=False,
         )
 
+    output_browser_interface = ui_output_browser.create_ui()
+
     modelmerger_ui = ui_checkpoint_merger.UiCheckpointMerger()
 
     with gr.Blocks(analytics_enabled=False) as train_interface:
@@ -1159,6 +1161,7 @@ def create_ui():
         (img2img_interface, "img2img", "img2img"),
         (extras_interface, "Extras", "extras"),
         (pnginfo_interface, "PNG Info", "pnginfo"),
+        (output_browser_interface, "History", "output_browser"),
         (modelmerger_ui.blocks, "Checkpoint Merger", "modelmerger"),
         (train_interface, "Train", "train"),
     ]
