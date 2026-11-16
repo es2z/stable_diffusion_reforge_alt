@@ -333,6 +333,7 @@ options_templates.update(options_section(('extra_networks', "Extra Networks", "s
     "extra_networks_card_text_scale": OptionInfo(1.0, "Card text scale", gr.Slider, {"minimum": 0.0, "maximum": 2.0, "step": 0.01}).info("1 = original size"),
     "extra_networks_card_show_desc": OptionInfo(True, "Show description on card"),
     "extra_networks_card_description_is_html": OptionInfo(False, "Treat card description as HTML"),
+    "extra_networks_panel_mode": OptionInfo("Tabs", "Extra Networks display", gr.Radio, {"choices": ["Tabs", "Side panel (right)", "Side panel (left)"]}).info("Tabs: a page of cards takes the place of the generation settings. Side panel: the cards open beside them, so settings, cards and results are visible together; needs a window at least 1000px wide"),
     "extra_networks_thumbnail_enabled": OptionInfo(True, "Use cached thumbnails for card previews").info("small JPEG copies that keep the generation parameters of the original image; stored in the cache directory, applied after refreshing the cards"),
     "extra_networks_thumbnail_size": OptionInfo(512, "Card thumbnail size", gr.Slider, {"minimum": 128, "maximum": 2048, "step": 64}).info("length of the longer side, in pixels"),
     "extra_networks_thumbnail_quality": OptionInfo(85, "Card thumbnail JPEG quality", gr.Slider, {"minimum": 30, "maximum": 100, "step": 1}),

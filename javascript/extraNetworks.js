@@ -1336,6 +1336,8 @@ function setupExtraNetworksForTab(tabname) {
             }
         });
 
+    extraNetworksApplyPanelMode();
+
     registerPrompt(tabname, tabname + "_prompt");
     registerPrompt(tabname, tabname + "_neg_prompt");
 }
@@ -1391,6 +1393,168 @@ function extraNetworksUnrelatedTabSelected(tabname) {
     extraNetworksShowControlsForPage(tabname, null);
 }
 
+// ============================================================================
+// Display mode: tabs, or a panel at the side
+// ============================================================================
+
+/** "tabs", "right" or "left", from the setting "Extra Networks display". */
+function extraNetworksPanelMode() {
+    var mode = (window.opts && opts.extra_networks_panel_mode) || "Tabs";
+    if (mode.indexOf("right") != -1) return "right";
+    if (mode.indexOf("left") != -1) return "left";
+    return "tabs";
+}
+
+/**
+ * Puts the pages of cards into the mode the setting asks for. Can be called any number of times.
+ *
+ * In tabs mode the search and sort controls of the open page sit in the row of tab buttons. In
+ * side panel mode every page keeps its controls at its own top, and CSS shows the open page as a
+ * panel fixed to the side while the "Generation" tab stays visible.
+ */
+function extraNetworksApplyPanelMode() {
+    var mode = extraNetworksPanelMode();
+    var side = mode != "tabs";
+
+    ["txt2img", "img2img"].forEach(function (tabname) {
+        var tabs = gradioApp().getElementById(tabname + "_extra_tabs");
+        if (!tabs) return;
+
+        tabs.classList.toggle("extra-networks-side", side);
+        tabs.classList.toggle("extra-networks-side--left", mode == "left");
+
+        var controlsDiv = tabs.querySelector(
+            ":scope > .tab-nav > .extra-networks-controls-div"
+        );
+
+        tabs.querySelectorAll(":scope > .tabitem.extra-page").forEach(
+            function (page) {
+                var pane = page.querySelector(".extra-network-pane");
+                if (!pane) return;
+
+                var tabname_full = pane.id.replace(/_pane$/, "");
+                var controls = gradioApp().getElementById(
+                    tabname_full + "_controls"
+                );
+                if (!controls) return;
+
+                if (side) {
+                    if (controls.parentElement !== pane) {
+                        pane.insertBefore(controls, pane.firstChild);
+                    }
+                    controls.style.display = "";
+                } else if (controlsDiv) {
+                    if (controls.parentElement !== controlsDiv) {
+                        controlsDiv.insertBefore(controls, null);
+                    }
+                    controls.style.display =
+                        page.style.display != "none" ? "" : "none";
+                }
+
+                // what the panel needs on top of the page: a way to close it and an edge to drag
+                if (!page.querySelector(":scope > .extra-networks-side-close")) {
+                    var close = document.createElement("div");
+                    close.className = "extra-networks-side-close";
+                    close.title = "Close the panel";
+                    close.textContent = "\u00d7";
+                    close.addEventListener("click", function () {
+                        var first = tabs.querySelector(
+                            ":scope > .tab-nav > button"
+                        );
+                        if (first) first.click();
+                    });
+                    page.appendChild(close);
+
+                    var resizer = document.createElement("div");
+                    resizer.className = "extra-networks-side-resizer";
+                    resizer.title = "Drag to resize the panel";
+                    resizer.addEventListener(
+                        "mousedown",
+                        extraNetworksSidePanelResizeStart
+                    );
+                    page.appendChild(resizer);
+                }
+            }
+        );
+    });
+
+    var width = parseInt(localGet("extra_networks_side_width"));
+    if (width > 0) {
+        document.documentElement.style.setProperty(
+            "--extra-networks-side-width",
+            width + "px"
+        );
+    }
+
+    extraNetworksUpdateSidePanelLayout();
+}
+
+/**
+ * Makes room for the panel beside the page content while a panel is open and visible.
+ */
+function extraNetworksUpdateSidePanelLayout() {
+    var mode = extraNetworksPanelMode();
+    var open = false;
+
+    if (mode != "tabs") {
+        gradioApp()
+            .querySelectorAll(".extra-networks-side > .tabitem.extra-page")
+            .forEach(function (page) {
+                // an open page of the tab that is on screen
+                if (page.getClientRects().length > 0) open = true;
+            });
+    }
+
+    document.body.classList.toggle(
+        "extra-networks-side-open-right",
+        open && mode == "right"
+    );
+    document.body.classList.toggle(
+        "extra-networks-side-open-left",
+        open && mode == "left"
+    );
+}
+
+function extraNetworksSidePanelResizeStart(event) {
+    event.preventDefault();
+
+    var left = extraNetworksPanelMode() == "left";
+    var onMove = function (moveEvent) {
+        var width = left
+            ? moveEvent.clientX
+            : window.innerWidth - moveEvent.clientX;
+        width = Math.max(
+            320,
+            Math.min(width, Math.round(window.innerWidth * 0.7))
+        );
+        document.documentElement.style.setProperty(
+            "--extra-networks-side-width",
+            width + "px"
+        );
+        localSet("extra_networks_side_width", width);
+    };
+    var onUp = function () {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("extra-networks-side-resizing");
+    };
+
+    document.body.classList.add("extra-networks-side-resizing");
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+}
+
+// Panels open and close with the tab buttons, and are only on screen with their main tab.
+document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest(".tab-nav")) {
+        setTimeout(extraNetworksUpdateSidePanelLayout, 0);
+        setTimeout(extraNetworksUpdateSidePanelLayout, 150);
+    }
+});
+window.addEventListener("resize", extraNetworksUpdateSidePanelLayout);
+
+onOptionsChanged(extraNetworksApplyPanelMode);
+
 function extraNetworksTabSelected(
     tabname,
     id,
@@ -1398,8 +1562,19 @@ function extraNetworksTabSelected(
     showNegativePrompt,
     tabname_full
 ) {
-    extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
+    if (extraNetworksPanelMode() != "tabs") {
+        // the generation tab stays visible beside the panel, and the prompts stay with it
+        extraNetworksMovePromptToTab(tabname, "", false, false);
+    } else {
+        extraNetworksMovePromptToTab(
+            tabname,
+            id,
+            showPrompt,
+            showNegativePrompt
+        );
+    }
     extraNetworksShowControlsForPage(tabname, tabname_full);
+    extraNetworksUpdateSidePanelLayout();
 
     // usage counts change while generating; opening the page is when they get looked at
     if (tabname_full) {

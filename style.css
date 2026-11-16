@@ -1329,6 +1329,110 @@ body.resizing .resize-handle {
     mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>');
 }
 
+/* ==== EXTRA NETWORKS AS A SIDE PANEL (setting "Extra Networks display") ==== */
+.extra-networks-side-close,
+.extra-networks-side-resizer {
+    display: none;
+}
+
+@media (min-width: 1000px) {
+    /* the generation tab stays, whichever page of cards is selected */
+    .extra-networks-side > .tabitem:not(.extra-page) {
+        display: block !important;
+    }
+
+    .extra-networks-side > .tabitem.extra-page {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: var(--extra-networks-side-width, 36vw);
+        min-width: 320px;
+        max-width: 70vw;
+        z-index: 999;
+        box-sizing: border-box;
+        padding: 0.5rem 0.5rem 0.5rem 0.75rem !important;
+        overflow: hidden;
+        background: var(--body-background-fill);
+        border: none !important;
+        border-left: 1px solid var(--border-color-primary) !important;
+        box-shadow: -4px 0 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .extra-networks-side.extra-networks-side--left > .tabitem.extra-page {
+        right: auto;
+        left: 0;
+        padding: 0.5rem 0.75rem 0.5rem 0.5rem !important;
+        border-left: none !important;
+        border-right: 1px solid var(--border-color-primary) !important;
+        box-shadow: 4px 0 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .extra-networks-side > .tabitem.extra-page .extra-network-pane {
+        height: calc(100vh - 1.5rem);
+        min-height: 0;
+        resize: none;
+    }
+
+    .extra-networks-side > .tabitem.extra-page .extra-network-control {
+        flex-wrap: wrap;
+        padding-right: 2rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-close {
+        display: block;
+        position: absolute;
+        top: 0.3rem;
+        right: 0.6rem;
+        z-index: 2;
+        font-size: 1.6rem;
+        line-height: 1;
+        cursor: pointer;
+        color: var(--body-text-color-subdued);
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-close:hover {
+        color: var(--body-text-color);
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-resizer {
+        display: block;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 6px;
+        cursor: ew-resize;
+    }
+
+    .extra-networks-side.extra-networks-side--left > .tabitem.extra-page > .extra-networks-side-resizer {
+        left: auto;
+        right: 0;
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-resizer:hover,
+    body.extra-networks-side-resizing .extra-networks-side-resizer {
+        background: var(--color-accent, #f97316);
+        opacity: 0.6;
+    }
+
+    /* the rest of the page moves over instead of being covered */
+    body.extra-networks-side-open-right gradio-app {
+        display: block;
+        margin-right: var(--extra-networks-side-width, 36vw);
+    }
+
+    body.extra-networks-side-open-left gradio-app {
+        display: block;
+        margin-left: var(--extra-networks-side-width, 36vw);
+    }
+
+    body.extra-networks-side-resizing {
+        user-select: none;
+    }
+}
+
 /* Generation queue: the cancel button is only there while something waits */
 .generation-queue-cancel {
     display: none;
