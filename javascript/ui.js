@@ -152,23 +152,114 @@ function showRestoreProgressButton(tabname, show) {
     button.style.setProperty('display', show ? 'flex' : 'none', 'important');
 }
 
-function submit() {
-    showSubmitButtons('txt2img', false);
+// Generations of each tab that were started from this page and have not finished: task id -> queue slot,
+// or null for the Generate button. More than one at a time is possible because of the queue button.
+var generationTasks = {txt2img: {}, img2img: {}};
+
+function updateGenerationQueueButtons(tabname) {
+    var waiting = Math.max(0, Object.keys(generationTasks[tabname]).length - 1);
+
+    var enqueue = gradioApp().getElementById(tabname + '_enqueue');
+    if (enqueue) {
+        enqueue.textContent = waiting > 0 ? "\u2795" + waiting : "\u2795";
+    }
+
+    var cancel = gradioApp().getElementById(tabname + '_cancel_queue');
+    if (cancel) {
+        cancel.style.display = waiting > 0 ? "block" : "none";
+    }
+}
+
+/**
+ * Common part of starting a generation: used by the Generate button and by the queue slots.
+ */
+function submitGeneration(tabname, args, slot) {
+    showSubmitButtons(tabname, false);
 
     var id = randomId();
-    localSet("txt2img_task_id", id);
+    localSet(tabname + "_task_id", id);
 
-    requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-        showSubmitButtons('txt2img', true);
-        localRemove("txt2img_task_id");
-        showRestoreProgressButton('txt2img', false);
+    generationTasks[tabname][id] = slot;
+    updateGenerationQueueButtons(tabname);
+
+    requestProgress(id, gradioApp().getElementById(tabname + '_gallery_container'), gradioApp().getElementById(tabname + '_gallery'), function() {
+        delete generationTasks[tabname][id];
+        updateGenerationQueueButtons(tabname);
+
+        // the buttons go back to "Generate" when the last job of the tab is through
+        if (Object.keys(generationTasks[tabname]).length == 0) {
+            showSubmitButtons(tabname, true);
+            localRemove(tabname + "_task_id");
+            showRestoreProgressButton(tabname, false);
+        }
     });
 
-    var res = create_submit_args(arguments);
+    var res = create_submit_args(args);
 
     res[0] = id;
+    if (tabname == 'img2img') {
+        res[1] = get_tab_index('mode_img2img');
+    }
 
     return res;
+}
+
+function submit() {
+    return submitGeneration('txt2img', arguments, null);
+}
+
+/** Called by the hidden button of a queue slot. */
+function submitQueuedGeneration(tabname, slot, args) {
+    return submitGeneration(tabname, args, slot);
+}
+
+/**
+ * Queue button: starts a generation with the settings as they are now. It runs after the ones that
+ * are running or waiting, and its result replaces the gallery when it is done.
+ */
+function enqueueGeneration(tabname) {
+    var used = Object.values(generationTasks[tabname]);
+
+    for (var slot = 0; ; slot++) {
+        var button = gradioApp().getElementById(tabname + '_queue_slot_' + slot);
+        if (!button) break;
+
+        if (used.indexOf(slot) == -1) {
+            button.click();
+            return;
+        }
+    }
+
+    // every slot is taken; the setting "Generation queue" decides how many there are
+    var enqueue = gradioApp().getElementById(tabname + '_enqueue');
+    if (enqueue) {
+        enqueue.textContent = "full";
+        setTimeout(function() {
+            updateGenerationQueueButtons(tabname);
+        }, 1500);
+    }
+}
+
+/**
+ * Takes the waiting generations of the tab out of the queue. The running one is not touched.
+ */
+function cancelQueuedGenerations(tabname) {
+    // 確認ダイアログ(既定では無効)。有効にする場合は次の3行のコメントを外してください。
+    // if (!confirm("Remove the waiting generations from the queue?")) {
+    //     return;
+    // }
+
+    var ids = Object.keys(generationTasks[tabname]);
+    if (ids.length == 0) return;
+
+    // the server knows which of them are still waiting and only cancels those
+    fetch("./internal/cancel-queued", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({id_tasks: ids}),
+    }).catch(function(error) {
+        console.error(error);
+    });
 }
 
 function submit_txt2img_upscale() {
@@ -180,23 +271,7 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
-    showSubmitButtons('img2img', false);
-
-    var id = randomId();
-    localSet("img2img_task_id", id);
-
-    requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-        showSubmitButtons('img2img', true);
-        localRemove("img2img_task_id");
-        showRestoreProgressButton('img2img', false);
-    });
-
-    var res = create_submit_args(arguments);
-
-    res[0] = id;
-    res[1] = get_tab_index('mode_img2img');
-
-    return res;
+    return submitGeneration('img2img', arguments, null);
 }
 
 function submit_extras() {

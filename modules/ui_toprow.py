@@ -121,6 +121,13 @@ class Toprow:
             self.clear_prompt_button = ToolButton(value=clear_prompt_symbol, elem_id=f"{self.id_part}_clear_prompt", tooltip="Clear prompt")
             self.apply_styles = ToolButton(value=ui_prompt_styles.styles_materialize_symbol, elem_id=f"{self.id_part}_style_apply", tooltip="Apply all selected styles to prompts.")
 
+            if shared.opts.generation_queue_slots > 0:
+                # Both only run javascript: see enqueueGeneration in javascript/ui.js
+                self.enqueue = ToolButton(value="➕", elem_id=f"{self.id_part}_enqueue", tooltip="Add to queue: generate with the current settings after the generations that are running or waiting.")
+                self.cancel_queue = ToolButton(value="✖", elem_id=f"{self.id_part}_cancel_queue", elem_classes=["generation-queue-cancel"], tooltip="Remove the waiting generations from the queue. The one that is running continues.")
+                self.enqueue.click(fn=None, _js="function(){ enqueueGeneration('" + self.id_part + "'); }", inputs=[], outputs=[], show_progress=False)
+                self.cancel_queue.click(fn=None, _js="function(){ cancelQueuedGenerations('" + self.id_part + "'); }", inputs=[], outputs=[], show_progress=False)
+
             if self.is_img2img:
                 self.button_interrogate = ToolButton('📎', tooltip='Interrogate CLIP - use CLIP neural network to create a text describing the image, and put it into the prompt field', elem_id="interrogate")
                 self.button_deepbooru = ToolButton('📦', tooltip='Interrogate DeepBooru - use DeepBooru neural network to create a text describing the image, and put it into the prompt field', elem_id="deepbooru")

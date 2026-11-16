@@ -386,6 +386,7 @@ options_templates.update(options_section(('ui_alternatives', "UI alternatives", 
 }))
 
 options_templates.update(options_section(('ui', "User interface", "ui"), {
+    "generation_queue_slots": OptionInfo(8, "Generation queue: how many generations can be added while one is running", gr.Slider, {"minimum": 0, "maximum": 32, "step": 1}).info("0 removes the queue button").needs_reload_ui(),
     "localization": OptionInfo("None", "Localization", gr.Dropdown, lambda: {"choices": ["None"] + list(localization.localizations.keys())}, refresh=lambda: localization.list_localizations(cmd_opts.localizations_dir)).needs_reload_ui(),
     "quicksettings_list": OptionInfo(["sd_model_checkpoint", "sd_vae", "CLIP_stop_at_last_layers"], "Quicksettings list", ui_components.DropdownMulti, lambda: {"choices": list(shared.opts.data_labels.keys())}).js("info", "settingsHintsShowQuicksettings").info("setting entries that appear at the top of page rather than in settings tab").needs_reload_ui(),
     "ui_tab_order": OptionInfo([], "UI tab order", ui_components.DropdownMulti, lambda: {"choices": list(shared.tab_names)}).needs_reload_ui(),
