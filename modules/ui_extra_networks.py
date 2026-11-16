@@ -22,7 +22,7 @@ from modules.infotext_utils import image_from_url_text
 
 extra_pages = []
 allowed_dirs = set()
-default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif"]
+default_allowed_preview_extensions = ["png", "jpg", "jpeg", "webp", "gif", "avif"]
 
 @functools.cache
 def allowed_preview_extensions_with_extra(extra_extensions=None):

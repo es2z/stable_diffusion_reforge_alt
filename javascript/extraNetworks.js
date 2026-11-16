@@ -263,6 +263,21 @@ var ExtraNetworksGrid = (function () {
         return element;
     }
 
+    /**
+     * Removes a row. Previews in it that are still loading are cancelled first: otherwise the
+     * server goes on preparing images for rows that were only scrolled past, and the ones that
+     * are in view now have to wait for them.
+     */
+    function discardRow(row) {
+        row.querySelectorAll("img.preview").forEach(function (img) {
+            if (!img.complete) {
+                img.onerror = null;
+                img.removeAttribute("src");
+            }
+        });
+        row.remove();
+    }
+
     function cardButton(tag, className, title, onclick) {
         var button = el(tag, className + " card-button");
         button.title = title;
@@ -563,9 +578,7 @@ var ExtraNetworksGrid = (function () {
             this.canvas.style.height = rowCount * this.rowHeight + "px";
 
             if (this.stale) {
-                this.rows.forEach(function (row) {
-                    row.remove();
-                });
+                this.rows.forEach(discardRow);
                 this.rows.clear();
                 this.stale = false;
             }
@@ -588,7 +601,7 @@ var ExtraNetworksGrid = (function () {
             var rows = this.rows;
             rows.forEach(function (row, index) {
                 if (index < first || index > last) {
-                    row.remove();
+                    discardRow(row);
                     rows.delete(index);
                 }
             });
