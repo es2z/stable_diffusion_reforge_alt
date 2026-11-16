@@ -251,6 +251,8 @@ var ExtraNetworksGrid = (function () {
     var CONFIG = {
         // Rows kept ready above and below the visible ones.
         OVERSCAN_ROWS: 2,
+        // Views (search + sort + favourites filter) whose scroll position is remembered.
+        REMEMBERED_VIEWS: 50,
     };
 
     var instances = {};
@@ -350,6 +352,8 @@ var ExtraNetworksGrid = (function () {
             favoritesOnly: false,
         };
         this.viewKey = null;
+        this.scrollPositions = new Map(); // view key -> where that view was scrolled to when it was left
+        this.pendingScrollTop = null; // position to go to once the new list has its height
 
         this.scroller = null; // #<tab>_<page>_cards, the element that scrolls
         this.canvas = null; // has the height of all rows together
@@ -433,19 +437,39 @@ var ExtraNetworksGrid = (function () {
         },
 
         /**
-         * Sets search and sort. Scrolls back to the top when they change.
+         * Sets search, sort and the favourites filter. A view that has not been shown before starts at
+         * the top; coming back to one (favourites off again, the previous sort, a cleared search, a
+         * directory opened earlier) returns to where it was left.
          */
         setView: function (view) {
             var viewKey = JSON.stringify(view);
             if (viewKey === this.viewKey) return;
 
             var isFirst = this.viewKey === null;
+            if (!isFirst && this.scroller) {
+                this.scrollPositions.delete(this.viewKey);
+                if (this.scroller.scrollTop > 0) {
+                    this.scrollPositions.set(
+                        this.viewKey,
+                        this.scroller.scrollTop
+                    );
+                    if (this.scrollPositions.size > CONFIG.REMEMBERED_VIEWS) {
+                        this.scrollPositions.delete(
+                            this.scrollPositions.keys().next().value
+                        );
+                    }
+                }
+            }
+
             this.view = view;
             this.viewKey = viewKey;
 
             if (!this.data || !this.mount()) return;
 
-            if (!isFirst) this.scroller.scrollTop = 0;
+            // applied by layout(): the list being left may be shorter than the position to return to
+            if (!isFirst) {
+                this.pendingScrollTop = this.scrollPositions.get(viewKey) || 0;
+            }
             this.update();
         },
 
@@ -576,6 +600,11 @@ var ExtraNetworksGrid = (function () {
 
             var rowCount = Math.ceil(this.visibleItems.length / columns);
             this.canvas.style.height = rowCount * this.rowHeight + "px";
+
+            if (this.pendingScrollTop !== null) {
+                this.scroller.scrollTop = this.pendingScrollTop;
+                this.pendingScrollTop = null;
+            }
 
             if (this.stale) {
                 this.rows.forEach(discardRow);
