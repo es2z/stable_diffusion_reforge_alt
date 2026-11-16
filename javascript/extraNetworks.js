@@ -1281,10 +1281,15 @@ function setupExtraNetworks() {
 // Extra Network Prompt Handling
 // ============================================================================
 
-var re_extranet = /<([^:^>]+:[^:]+):[\d.]+>(.*)/s;
-var re_extranet_g = /<([^:^>]+:[^:]+):[\d.]+>/g;
+// The weight may be negative: <lora:name:-0.5>
+var re_extranet = /<([^:^>]+:[^:]+):-?[\d.]+>(.*)/s;
+var re_extranet_g = /<([^:^>]+:[^:]+):-?[\d.]+>/g;
 var re_extranet_neg = /\(([^:^>]+:[\d.]+)\)/;
 var re_extranet_g_neg = /\(([^:^>]+:[\d.]+)\)/g;
+
+function extraNetworksEscapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
     var m = text.match(isNeg ? re_extranet_neg : re_extranet);
@@ -1335,8 +1340,15 @@ function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
             }
         }
     } else {
+        // Plain text such as the name of an embedding. It is looked for literally - names contain
+        // characters like "(", "+" and "." - and as a whole word, so that it is not cut out of a longer one.
         newTextareaText = textarea.value.replaceAll(
-            new RegExp(`((?:${extraTextBeforeNet})?${text})`, "g"),
+            new RegExp(
+                `((?:${extraNetworksEscapeRegExp(extraTextBeforeNet)})?(?<!\\w)${extraNetworksEscapeRegExp(
+                    text
+                )}(?!\\w))`,
+                "g"
+            ),
             ""
         );
         replaced = newTextareaText != textarea.value;
