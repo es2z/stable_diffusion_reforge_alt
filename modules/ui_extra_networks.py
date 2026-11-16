@@ -251,18 +251,6 @@ def get_items(page: str = ""):
     return JSONResponse(page.create_items_data())
 
 
-def get_tree_html(page: str = "", tabname: str = ""):
-    from starlette.responses import JSONResponse
-
-    check_tabname(tabname)
-
-    page = get_page(page)
-    if page is None:
-        raise HTTPException(status_code=404, detail="Page not found")
-
-    return JSONResponse({"html": page.create_tree_view_html(tabname)})
-
-
 def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     from starlette.responses import JSONResponse
 
@@ -282,7 +270,8 @@ def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     page.read_user_metadata(item, use_cache=False)
     item_html = page.create_item_html(tabname, item, shared.html("extra-networks-card.html"))
 
-    return JSONResponse({"html": item_html})
+    # "item" is what the cards are built from; "html" is kept for other users of this endpoint
+    return JSONResponse({"html": item_html, "item": page.create_item_data(item)})
 
 
 def add_pages_to_demo(app):
@@ -290,7 +279,6 @@ def add_pages_to_demo(app):
     app.add_api_route("/sd_extra_networks/cover-images", fetch_cover_images, methods=["GET"])
     app.add_api_route("/sd_extra_networks/metadata", get_metadata, methods=["GET"])
     app.add_api_route("/sd_extra_networks/items", get_items, methods=["GET"])
-    app.add_api_route("/sd_extra_networks/tree-html", get_tree_html, methods=["GET"])
     app.add_api_route("/sd_extra_networks/get-single-card", get_single_card, methods=["GET"])
 
 
@@ -718,6 +706,25 @@ class ExtraNetworksPage:
 
         return "/." in local_path or "\\." in local_path
 
+    def tree_path(self, filename: str) -> str:
+        """Where the file goes in the tree view: its path starting from the name of the directory it was found in.
+
+        The same keys `get_tree` produces, e.g. "Lora/characters/name.safetensors".
+        """
+        if not filename:
+            return ""
+
+        abspath = os.path.abspath(filename)
+        for root in self.allowed_directories_for_previews():
+            if not root:
+                continue
+
+            root = os.path.abspath(root)
+            if os.path.normcase(abspath).startswith(os.path.normcase(root) + os.sep):
+                return os.path.relpath(abspath, os.path.dirname(root))
+
+        return ""
+
     def create_item_data(self, item: dict) -> Optional[dict]:
         """Describes a single item for the browser, which builds the card from it.
 
@@ -738,6 +745,7 @@ class ExtraNetworksPage:
             "search_only": search_only,
             "sort_keys": item.get("sort_keys", {}),
             "has_metadata": bool(item.get("metadata")),
+            "tree_path": self.tree_path(item.get("filename", "")),
         }
 
         onclick = item.get("onclick", None)
@@ -772,6 +780,7 @@ class ExtraNetworksPage:
             "description_is_html": bool(shared.opts.extra_networks_card_description_is_html),
             "dirs": self.list_subdirs() if shared.opts.extra_networks_tree_view_style != "Tree" else [],
             "no_cards_html": shared.html("extra-networks-no-cards.html").format(dirs=dirs),
+            "path_separator": os.sep,
         }
 
     def create_html(self, tabname, *, empty=False):

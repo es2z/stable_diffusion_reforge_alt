@@ -49,22 +49,66 @@ var ExtraNetworksData = (function () {
         });
     }
 
+    function prepareItem(data, item, index) {
+        var description = item.description || "";
+        if (data.description_is_html) {
+            description = description.replace(/<[^>]*>/g, " ");
+        }
+
+        item.index = index;
+        // the same text the search used to collect from the card's elements
+        item.searchText = (item.search_terms || [])
+            .concat([description])
+            .join(" ")
+            .toLowerCase();
+
+        return item;
+    }
+
     function prepare(data) {
         data.items.forEach(function (item, index) {
-            var description = item.description || "";
-            if (data.description_is_html) {
-                description = description.replace(/<[^>]*>/g, " ");
-            }
-
-            item.index = index;
-            // the same text the search used to collect from the card's elements
-            item.searchText = (item.search_terms || [])
-                .concat([description])
-                .join(" ")
-                .toLowerCase();
+            prepareItem(data, item, index);
         });
 
         return data;
+    }
+
+    /**
+     * Replaces one item with a newer description of it; null removes it.
+     * Returns false if the page is not loaded.
+     */
+    function updateItem(pageName, name, item) {
+        var page = entry(pageName);
+        var data = page.data;
+        if (!data) return false;
+
+        var position = -1;
+        for (var i = 0; i < data.items.length; i++) {
+            if (data.items[i].name === name) {
+                position = i;
+                break;
+            }
+        }
+
+        if (!item) {
+            if (position !== -1) data.items.splice(position, 1);
+        } else if (position !== -1) {
+            var old = data.items[position];
+            // a single item is listed without its place in the list; it stays where it was
+            item.sort_keys = item.sort_keys || {};
+            if (
+                item.sort_keys.default === undefined ||
+                item.sort_keys.default === null
+            ) {
+                item.sort_keys.default = (old.sort_keys || {}).default;
+            }
+            data.items[position] = prepareItem(data, item, old.index);
+        } else {
+            data.items.push(prepareItem(data, item, data.items.length));
+        }
+
+        notify(page, "ready");
+        return true;
     }
 
     function load(pageName, force) {
@@ -122,6 +166,8 @@ var ExtraNetworksData = (function () {
                 })
             );
         },
+
+        updateItem: updateItem,
 
         /** Returns what the server sent for the page, or null while it is not loaded. */
         get: function (pageName) {
@@ -500,6 +546,40 @@ var ExtraNetworksGrid = (function () {
         },
 
         /**
+         * Javascript that runs when the item is chosen.
+         */
+        onclickFor: function (item) {
+            if (item.onclick !== undefined && item.onclick !== null) {
+                return item.onclick;
+            }
+
+            // prompt and negative_prompt are javascript expressions, evaluated when the card is clicked
+            return (
+                "cardClicked('" +
+                this.tabname +
+                "', " +
+                item.prompt +
+                ", " +
+                item.negative_prompt +
+                ", " +
+                (this.data && this.data.allow_negative_prompt
+                    ? "true"
+                    : "false") +
+                ");"
+            );
+        },
+
+        /**
+         * Does what clicking the item's card does; the card itself may not exist at the moment.
+         */
+        activate: function (item, event) {
+            return new Function("event", this.onclickFor(item)).call(
+                null,
+                event
+            );
+        },
+
+        /**
          * Builds the element for one item; same structure as html/extra-networks-card.html.
          */
         createCard: function (item) {
@@ -514,21 +594,7 @@ var ExtraNetworksGrid = (function () {
                 card.setAttribute("data-sort-" + key, item.sort_keys[key]);
             });
 
-            var onclick = item.onclick;
-            if (onclick === undefined || onclick === null) {
-                // prompt and negative_prompt are javascript expressions, evaluated when the card is clicked
-                onclick =
-                    "cardClicked('" +
-                    tabname +
-                    "', " +
-                    item.prompt +
-                    ", " +
-                    item.negative_prompt +
-                    ", " +
-                    (data.allow_negative_prompt ? "true" : "false") +
-                    ");";
-            }
-            card.setAttribute("onclick", onclick);
+            card.setAttribute("onclick", this.onclickFor(item));
 
             if (item.preview) {
                 var img = el("img", "preview");
@@ -656,6 +722,314 @@ var ExtraNetworksGrid = (function () {
 })();
 
 // ============================================================================
+// Directory tree, built as it is opened
+// ============================================================================
+
+var ExtraNetworksTree = (function () {
+    "use strict";
+
+    var states = {}; // "txt2img_lora" -> what the tree in that pane was built from
+    var nodes = new WeakMap(); // <ul> of a directory -> its content, until the directory is opened
+
+    /** Same order as natural_sort_key on the server: numbers inside names count as numbers. */
+    function naturalCompare(a, b) {
+        var as = a.split(/([0-9]+)/);
+        var bs = b.split(/([0-9]+)/);
+        for (var i = 0; i < Math.min(as.length, bs.length); i++) {
+            var x, y;
+            if (i % 2) {
+                x = parseInt(as[i]);
+                y = parseInt(bs[i]);
+            } else {
+                x = as[i].toLowerCase();
+                y = bs[i].toLowerCase();
+            }
+            if (x !== y) return x < y ? -1 : 1;
+        }
+        return as.length - bs.length;
+    }
+
+    function el(tag, className) {
+        var element = document.createElement(tag);
+        if (className) element.className = className;
+        return element;
+    }
+
+    /** Groups the items into nested directories by their tree_path. */
+    function buildModel(data) {
+        var separator = data.path_separator || "/";
+        var root = { dirs: Object.create(null), files: [] };
+
+        data.items.forEach(function (item) {
+            if (!item.tree_path) return;
+
+            var parts = item.tree_path.split(separator);
+            var node = root;
+            var path = "";
+            for (var i = 0; i < parts.length - 1; i++) {
+                path = path ? path + separator + parts[i] : parts[i];
+                if (!node.dirs[parts[i]]) {
+                    node.dirs[parts[i]] = {
+                        name: parts[i],
+                        path: path,
+                        dirs: Object.create(null),
+                        files: [],
+                    };
+                }
+                node = node.dirs[parts[i]];
+            }
+            node.files.push(item);
+        });
+
+        return root;
+    }
+
+    /** One line of the tree; same structure as html/extra-networks-tree-button.html. */
+    function createContent(tabname, pageName, options) {
+        var filterText = el("span");
+        filterText.setAttribute("data-filterable-item-text", "");
+        filterText.hidden = true;
+
+        var content = el("div", "tree-list-content " + options.subclass);
+        content.setAttribute("type", "button");
+        content.setAttribute(
+            "onclick",
+            "extraNetworksTreeOnClick(event, '" +
+                tabname +
+                "', '" +
+                pageName +
+                "');"
+        );
+        content.setAttribute("data-path", options.path);
+        content.setAttribute("data-hash", options.hash || "");
+
+        var leadingAction = el(
+            "span",
+            "tree-list-item-action tree-list-item-action--leading"
+        );
+        leadingAction.appendChild(el("i", "tree-list-item-action-chevron"));
+        content.appendChild(leadingAction);
+
+        var leadingVisual = el(
+            "span",
+            "tree-list-item-visual tree-list-item-visual--leading"
+        );
+        leadingVisual.textContent = options.icon;
+        content.appendChild(leadingVisual);
+
+        var label = el(
+            "span",
+            "tree-list-item-label tree-list-item-label--truncate"
+        );
+        label.textContent = options.label;
+        content.appendChild(label);
+
+        content.appendChild(
+            el("span", "tree-list-item-visual tree-list-item-visual--trailing")
+        );
+
+        var trailingAction = el(
+            "span",
+            "tree-list-item-action tree-list-item-action--trailing"
+        );
+        content.appendChild(trailingAction);
+
+        return {
+            filterText: filterText,
+            content: content,
+            trailingAction: trailingAction,
+        };
+    }
+
+    function createDirItem(tabname, pageName, node) {
+        var li = el("li", "tree-list-item tree-list-item--has-subitem");
+        li.setAttribute("data-tree-entry-type", "dir");
+
+        var line = createContent(tabname, pageName, {
+            subclass: "tree-list-content-dir",
+            path: node.path,
+            icon: "🗀",
+            label: node.name,
+        });
+        li.appendChild(line.filterText);
+        li.appendChild(line.content);
+
+        // Stays empty until the directory is opened.
+        var ul = el("ul", "tree-list tree-list--subgroup");
+        ul.hidden = true;
+        nodes.set(ul, { tabname: tabname, pageName: pageName, node: node });
+        li.appendChild(ul);
+
+        return li;
+    }
+
+    function createFileItem(tabname, pageName, item) {
+        var li = el("li", "tree-list-item tree-list-item--subitem");
+        li.setAttribute("data-tree-entry-type", "file");
+
+        var line = createContent(tabname, pageName, {
+            subclass: "tree-list-content-file",
+            path: item.tree_path,
+            hash: item.shorthash,
+            icon: "🗎",
+            label: item.name,
+        });
+        line.content.setAttribute("data-name", item.name);
+
+        // The buttons look for the name two levels up, where a card has it.
+        line.trailingAction.setAttribute("data-name", item.name);
+        var buttons = el("div", "button-row");
+        var copyPath = el("div", "copy-path-button card-button");
+        copyPath.title = "Copy path to clipboard";
+        copyPath.setAttribute("onclick", "extraNetworksCopyCardPath(event)");
+        copyPath.setAttribute("data-clipboard-text", item.filename || "");
+        buttons.appendChild(copyPath);
+        if (item.has_metadata) {
+            var metadata = el("div", "metadata-button card-button");
+            metadata.title = "Show internal metadata";
+            metadata.setAttribute(
+                "onclick",
+                "extraNetworksRequestMetadata(event, '" + pageName + "')"
+            );
+            buttons.appendChild(metadata);
+        }
+        var edit = el("div", "edit-button card-button");
+        edit.title = "Edit metadata";
+        edit.setAttribute(
+            "onclick",
+            "extraNetworksEditUserMetadata(event, '" +
+                tabname +
+                "', '" +
+                pageName +
+                "')"
+        );
+        buttons.appendChild(edit);
+        line.trailingAction.appendChild(buttons);
+
+        li.appendChild(line.filterText);
+        li.appendChild(line.content);
+
+        return li;
+    }
+
+    /**
+     * Creates the entries of a directory. Happens when it is opened for the first time, so a
+     * collapsed directory costs nothing however many files it has.
+     */
+    function populate(ul) {
+        var pending = nodes.get(ul);
+        if (!pending) return;
+        nodes.delete(ul);
+
+        var node = pending.node;
+        var fragment = document.createDocumentFragment();
+
+        // Directories are always displayed before files.
+        Object.keys(node.dirs)
+            .sort(naturalCompare)
+            .forEach(function (name) {
+                fragment.appendChild(
+                    createDirItem(
+                        pending.tabname,
+                        pending.pageName,
+                        node.dirs[name]
+                    )
+                );
+            });
+
+        node.files
+            .slice()
+            .sort(function (a, b) {
+                return naturalCompare(a.tree_path, b.tree_path);
+            })
+            .forEach(function (item) {
+                fragment.appendChild(
+                    createFileItem(pending.tabname, pending.pageName, item)
+                );
+            });
+
+        ul.appendChild(fragment);
+    }
+
+    /** Opens the directories whose paths are given, as far as they still exist. */
+    function reopen(ul, expanded) {
+        ul.querySelectorAll(
+            ":scope > li > .tree-list-content-dir"
+        ).forEach(function (content) {
+            if (!expanded.has(content.dataset.path)) return;
+
+            var childUl = content.nextElementSibling;
+            populate(childUl);
+            childUl.hidden = false;
+            content.dataset.expanded = "";
+            reopen(childUl, expanded);
+        });
+    }
+
+    /**
+     * Shows the tree for a page in a tab. Does nothing if the files are the same as last time.
+     */
+    function render(tabname, pageName, data) {
+        var key = tabname + "_" + pageName;
+        var container = gradioApp().getElementById(key + "_tree");
+        if (!container) return;
+
+        var signature = data.items
+            .map(function (item) {
+                return item.tree_path || "";
+            })
+            .join("\n");
+        var state = states[key];
+        if (
+            state &&
+            state.signature === signature &&
+            state.list.isConnected
+        ) {
+            return;
+        }
+
+        // what the user had open stays open
+        var expanded = new Set();
+        var selected = null;
+        container
+            .querySelectorAll(".tree-list-content-dir")
+            .forEach(function (content) {
+                if ("expanded" in content.dataset) {
+                    expanded.add(content.dataset.path);
+                }
+                if ("selected" in content.dataset) {
+                    selected = content.dataset.path;
+                }
+            });
+
+        var model = buildModel(data);
+        var list = el("ul", "tree-list tree-list--tree");
+        nodes.set(list, { tabname: tabname, pageName: pageName, node: model });
+        populate(list);
+        reopen(list, expanded);
+
+        if (selected !== null) {
+            list.querySelectorAll(".tree-list-content-dir").forEach(
+                function (content) {
+                    if (content.dataset.path === selected) {
+                        content.dataset.selected = "";
+                    }
+                }
+            );
+        }
+
+        container.textContent = "";
+        container.appendChild(list);
+        states[key] = { signature: signature, list: list };
+    }
+
+    return {
+        render: render,
+        populate: populate,
+    };
+})();
+
+// ============================================================================
 // CSS Toggle Helper
 // ============================================================================
 
@@ -710,25 +1084,6 @@ function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
         button.textContent = subdir === "" ? "all" : subdir;
         container.appendChild(button);
     });
-}
-
-/**
- * Fills the tree of the "Tree" view.
- */
-function extraNetworksLoadTree(tabname, extra_networks_tabname) {
-    var container = gradioApp().getElementById(
-        tabname + "_" + extra_networks_tabname + "_tree"
-    );
-    if (!container) return;
-
-    requestGet(
-        "./sd_extra_networks/tree-html",
-        { page: extra_networks_tabname, tabname: tabname },
-        function (data) {
-            container.innerHTML = data.html || "";
-        },
-        function () {}
-    );
 }
 
 /**
@@ -819,7 +1174,7 @@ function setupExtraNetworksForTab(tabname) {
                 grid.setState(state);
                 if (state.status === "ready") {
                     extraNetworksRenderDirs(tabname, pageName, state.data);
-                    extraNetworksLoadTree(tabname, pageName);
+                    ExtraNetworksTree.render(tabname, pageName, state.data);
                 }
             });
             ExtraNetworksData.load(pageName);
@@ -1077,6 +1432,8 @@ function extraNetworksTreeProcessDirectoryClick(
 
     function _expand_or_collapse(_ul, _btn) {
         if (_ul.hasAttribute("hidden")) {
+            // the entries of a directory are created when it is first opened
+            ExtraNetworksTree.populate(_ul);
             _ul.removeAttribute("hidden");
             _btn.dataset.expanded = "";
         } else {
@@ -1135,24 +1492,15 @@ function extraNetworksTreeProcessFileClick(
     tabname,
     extra_networks_tabname
 ) {
-    // Handle file click - typically triggers the card action
-    var path = btn.dataset.path;
-    var hash = btn.dataset.hash;
-
-    // Find and click the corresponding card
-    if (hash) {
-        var card = gradioApp().querySelector(
-            "#" +
-                tabname +
-                "_" +
-                extra_networks_tabname +
-                '_cards .card[data-name="' +
-                hash +
-                '"]'
-        );
-        if (card) {
-            card.click();
-        }
+    // Handle file click - does what clicking the card does. The card is looked up in the data:
+    // it only exists as an element while it is scrolled into view.
+    var grid = ExtraNetworksGrid.get(tabname + "_" + extra_networks_tabname);
+    var item = ExtraNetworksData.getItem(
+        extra_networks_tabname,
+        btn.dataset.name
+    );
+    if (grid && item) {
+        grid.activate(item, event);
     }
 }
 
@@ -1458,7 +1806,26 @@ function extraNetworksEditUserMetadata(event, tabname, extraPage) {
 
 function extraNetworksRefreshSingleCard(page, tabname, name) {
     // `page` is the page's name; its items are kept under the name of its tab
-    ExtraNetworksData.load(page.replace(/ /g, "_"), true);
+    var pageName = page.replace(/ /g, "_");
+    var reloadPage = function () {
+        ExtraNetworksData.load(pageName, true);
+    };
+
+    requestGet(
+        "./sd_extra_networks/get-single-card",
+        { page: page, tabname: tabname, name: name },
+        function (data) {
+            // Only this item changes; every tab showing the page redraws its visible cards.
+            if (
+                !data ||
+                !("item" in data) ||
+                !ExtraNetworksData.updateItem(pageName, name, data.item)
+            ) {
+                reloadPage();
+            }
+        },
+        reloadPage
+    );
 }
 
 /**
