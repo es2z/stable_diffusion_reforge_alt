@@ -1160,7 +1160,21 @@ function setupExtraNetworksForTab(tabname) {
                 });
             };
 
-            search.addEventListener("input", applyView);
+            search.addEventListener("input", function () {
+                // A directory of the tree stays marked as selected only while the search is the one it set.
+                var tree = gradioApp().getElementById(tabname_full + "_tree");
+                if (tree) {
+                    tree.querySelectorAll(
+                        ".tree-list-content[data-selected]"
+                    ).forEach(function (content) {
+                        if (content.dataset.path !== search.value) {
+                            delete content.dataset.selected;
+                        }
+                    });
+                }
+
+                applyView();
+            });
             if (regexCheckbox) {
                 regexCheckbox.addEventListener("change", applyView);
             }
@@ -1455,7 +1469,9 @@ function extraNetworksTreeProcessDirectoryClick(
     }
 
     function _remove_selected_from_all() {
-        var sels = document.querySelectorAll("div.tree-list-content");
+        // Only in the tree that was clicked: the other panes keep their own search, and so their selection.
+        var tree = btn.closest(".extra-network-tree") || document;
+        var sels = tree.querySelectorAll("div.tree-list-content");
         [...sels].forEach((el) => {
             delete el.dataset.selected;
         });
@@ -1590,6 +1606,9 @@ function extraNetworksControlTreeViewOnClick(
         tabname + "_" + extra_networks_tabname + "_cards"
     );
     var resizeHandle = pane.querySelector(".resize-handle");
+
+    // The "Dirs" style has directory buttons instead of a tree; the class toggled above hides them.
+    if (!tree) return;
 
     if (pane.classList.contains("extra-network-dirs-hidden")) {
         tree.style.display = "none";
