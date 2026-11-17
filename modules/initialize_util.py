@@ -167,6 +167,10 @@ def configure_sigint_handler():
         if shared.opts.dump_stacks_on_signal:
             dumpstacks()
 
+        # images still being encoded in the background are finished first; a second ctrl+c does not wait
+        from modules import restart
+        restart.finish_background_saves()
+
         os._exit(0)
 
     if not os.environ.get("COVERAGE_RUN"):

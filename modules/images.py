@@ -7,9 +7,10 @@ import io
 import math
 import os
 import threading
+import time
 import uuid
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import re
 
 import numpy as np
@@ -691,7 +692,7 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         image.save(filename, format=image_format, quality=opts.jpeg_quality)
 
 
-def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None):
+def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None, defer=False):
     """Save an image.
 
     Args:
@@ -717,6 +718,11 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
             If specified, `basename` and filename pattern will be ignored.
         save_to_dirs (bool):
             If true, the image will be saved into a subdirectory of `path`.
+        defer (bool):
+            If true, nothing is written yet. The file name is chosen, the sequence number is taken
+            and the `before_image_saved` callbacks run as usual; what is returned is a function
+            without arguments that encodes and writes the file when it is called (from any
+            thread) and returns (fullfn, txt_fullfn). See `save_images_in_background`.
 
     Returns: (fullfn, txt_fullfn)
         fullfn (`str`):
@@ -782,66 +788,74 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
     fullfn = params.filename
     info = params.pnginfo.get(pnginfo_section_name, None)
 
-    def _atomically_save_image(image_to_save, filename_without_extension, extension):
-        """
-        save image with .tmp extension to avoid race condition when another process detects new image in the directory
-        """
-        temp_file_path = os.path.join(os.path.dirname(filename_without_extension), f".{uuid.uuid4().hex}.tmp")
+    def write(image=image, fullfn=fullfn):
+        """Encodes the image and writes the files. What is written, and where, is settled by now."""
 
-        try:
-            save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name)
+        def _atomically_save_image(image_to_save, filename_without_extension, extension):
+            """
+            save image with .tmp extension to avoid race condition when another process detects new image in the directory
+            """
+            temp_file_path = os.path.join(os.path.dirname(filename_without_extension), f".{uuid.uuid4().hex}.tmp")
 
-            filename = filename_without_extension + extension
-            if shared.opts.save_images_replace_action != "Replace":
-                n = 0
-                while os.path.exists(filename):
-                    n += 1
-                    filename = f"{filename_without_extension}-{n}{extension}"
-            os.replace(temp_file_path, filename)
-        finally:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-
-    fullfn_without_extension, extension = os.path.splitext(params.filename)
-    if hasattr(os, 'statvfs'):
-        max_name_len = os.statvfs(path).f_namemax
-        fullfn_without_extension = fullfn_without_extension[:max_name_len - max(4, len(extension))]
-        params.filename = fullfn_without_extension + extension
-        fullfn = params.filename
-    _atomically_save_image(image, fullfn_without_extension, extension)
-
-    image.already_saved_as = fullfn
-
-    oversize = image.width > opts.target_side_length or image.height > opts.target_side_length
-    if opts.export_for_4chan and (oversize or os.stat(fullfn).st_size > opts.img_downscale_threshold * 1024 * 1024):
-        ratio = image.width / image.height
-        resize_to = None
-        if oversize and ratio > 1:
-            resize_to = round(opts.target_side_length), round(image.height * opts.target_side_length / image.width)
-        elif oversize:
-            resize_to = round(image.width * opts.target_side_length / image.height), round(opts.target_side_length)
-
-        if resize_to is not None:
             try:
-                # Resizing image with LANCZOS could throw an exception if e.g. image mode is I;16
-                image = image.resize(resize_to, LANCZOS)
-            except Exception:
-                image = image.resize(resize_to)
-        try:
-            _atomically_save_image(image, fullfn_without_extension, ".jpg")
-        except Exception as e:
-            errors.display(e, "saving image as downscaled JPG")
+                save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name)
 
-    if opts.save_txt and info is not None:
-        txt_fullfn = f"{fullfn_without_extension}.txt"
-        with open(txt_fullfn, "w", encoding="utf8") as file:
-            file.write(f"{info}\n")
-    else:
-        txt_fullfn = None
+                filename = filename_without_extension + extension
+                if shared.opts.save_images_replace_action != "Replace":
+                    n = 0
+                    while os.path.exists(filename):
+                        n += 1
+                        filename = f"{filename_without_extension}-{n}{extension}"
+                os.replace(temp_file_path, filename)
+            finally:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
 
-    script_callbacks.image_saved_callback(params)
+        fullfn_without_extension, extension = os.path.splitext(params.filename)
+        if hasattr(os, 'statvfs'):
+            max_name_len = os.statvfs(path).f_namemax
+            fullfn_without_extension = fullfn_without_extension[:max_name_len - max(4, len(extension))]
+            params.filename = fullfn_without_extension + extension
+            fullfn = params.filename
+        _atomically_save_image(image, fullfn_without_extension, extension)
 
-    return fullfn, txt_fullfn
+        image.already_saved_as = fullfn
+
+        oversize = image.width > opts.target_side_length or image.height > opts.target_side_length
+        if opts.export_for_4chan and (oversize or os.stat(fullfn).st_size > opts.img_downscale_threshold * 1024 * 1024):
+            ratio = image.width / image.height
+            resize_to = None
+            if oversize and ratio > 1:
+                resize_to = round(opts.target_side_length), round(image.height * opts.target_side_length / image.width)
+            elif oversize:
+                resize_to = round(image.width * opts.target_side_length / image.height), round(opts.target_side_length)
+
+            if resize_to is not None:
+                try:
+                    # Resizing image with LANCZOS could throw an exception if e.g. image mode is I;16
+                    image = image.resize(resize_to, LANCZOS)
+                except Exception:
+                    image = image.resize(resize_to)
+            try:
+                _atomically_save_image(image, fullfn_without_extension, ".jpg")
+            except Exception as e:
+                errors.display(e, "saving image as downscaled JPG")
+
+        if opts.save_txt and info is not None:
+            txt_fullfn = f"{fullfn_without_extension}.txt"
+            with open(txt_fullfn, "w", encoding="utf8") as file:
+                file.write(f"{info}\n")
+        else:
+            txt_fullfn = None
+
+        script_callbacks.image_saved_callback(params)
+
+        return fullfn, txt_fullfn
+
+    if defer:
+        return write
+
+    return write()
 
 
 def _submit_parallel_save_requests(save_requests):
@@ -866,15 +880,184 @@ def _submit_parallel_save_requests(save_requests):
 
 
 def save_images_parallel(save_requests):
-    """Save a batch concurrently while reusing worker threads between batches."""
+    """Save a batch concurrently while reusing worker threads between batches.
+
+    With the option "Save generated images in the background" the files are written by
+    `save_images_in_background` instead, and this returns before they are.
+    """
     if not save_requests:
         return []
+
+    if opts.data.get("save_images_async", False):
+        return save_images_in_background(save_requests)
 
     if len(save_requests) == 1:
         return [save_image(**save_requests[0])]
 
     futures = _submit_parallel_save_requests(save_requests)
     return [future.result() for future in futures]
+
+
+# ---- saving in the background --------------------------------------------------------------------
+#
+# Encoding can take far longer than it takes to hand over the pixels - a slow AVIF preset needs
+# seconds per image. With the option save_images_async the generation does not wait for it: the next
+# batch (or the next job of the queue) is sampled on the GPU while the last images are encoded on
+# the CPU. What is settled before the generation goes on is everything that depends on its state:
+# file names, sequence numbers and the before_image_saved callbacks (see `defer` of save_image).
+#
+# A job started from the UI still ends only when its files are written (wait_for_background_saves is
+# called for it by modules.call_queue), so the gallery shows the files themselves, as always.
+
+_background_condition = threading.Condition()
+_background_executor = None
+_background_executor_workers = 0
+_background_unfinished = 0
+"""images handed over and not written yet"""
+_background_groups = {}
+"""job id -> futures of the images of that job"""
+_background_exit_requested = False
+
+
+def background_save_workers():
+    """How many images are encoded at the same time."""
+    workers = int(opts.data.get("save_images_async_workers", 0) or 0)
+    if workers <= 0:
+        # half of the threads: encoders use several threads each, and the generation needs some as well
+        workers = max(2, (os.cpu_count() or 4) // 2)
+
+    return workers
+
+
+def background_saves_unfinished(group=None):
+    """Number of images that are not written yet: of one job, or of all if no job is given."""
+    with _background_condition:
+        if group is None:
+            return _background_unfinished
+
+        return sum(1 for future in _background_groups.get(group, []) if not future.done())
+
+
+def _run_background_save(write):
+    global _background_unfinished
+
+    try:
+        return write()
+    except Exception:
+        # the generation that made the image has gone on, or is over: there is nobody to raise this to
+        errors.report("Error saving image in the background", exc_info=True)
+        return None
+    finally:
+        with _background_condition:
+            _background_unfinished -= 1
+            _background_condition.notify_all()
+
+
+def save_images_in_background(save_requests):
+    """Hands images over for saving and returns without waiting for the files.
+
+    The file name of each image is chosen right here, in order, and its before_image_saved
+    callbacks run here; encoding and writing happen on other threads, a few images at a time.
+    Returns the futures; their results are what save_image returns, or None if saving failed
+    (the error is printed).
+
+    Images wait in memory until they are written. If more of them pile up than the encoders keep
+    up with, this waits for some to be written before it takes more.
+    """
+    global _background_executor, _background_executor_workers, _background_unfinished
+
+    from modules import progress
+
+    group = progress.current_task
+    workers = background_save_workers()
+    limit = max(16, workers * 4)
+    futures = []
+
+    for request in save_requests:
+        write = save_image(**request, defer=True)
+
+        with _background_condition:
+            if _background_unfinished >= limit:
+                textinfo = shared.state.textinfo
+                shared.state.textinfo = "Waiting for images to be saved..."
+                try:
+                    while _background_unfinished >= limit:
+                        _background_condition.wait()
+                finally:
+                    shared.state.textinfo = textinfo
+
+            previous_executor = None
+            if _background_executor is None or _background_executor_workers != workers:
+                previous_executor = _background_executor
+                _background_executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="image-save-background")
+                _background_executor_workers = workers
+
+            _background_unfinished += 1
+            future = _background_executor.submit(_run_background_save, write)
+            futures.append(future)
+
+            if group is not None:
+                # jobs nobody waited for (API calls) leave their futures behind; they go once they are done
+                for key in [key for key, value in _background_groups.items() if key != group and all(x.done() for x in value)]:
+                    del _background_groups[key]
+
+                _background_groups.setdefault(group, []).append(future)
+
+        if previous_executor is not None:
+            previous_executor.shutdown(wait=False)  # what it was given already is still written
+
+    return futures
+
+
+def wait_for_background_saves(group=None, timeout=None):
+    """Waits until the images of one job are written, or all images if no job is given.
+
+    Returns True if they are, False if the timeout ran out first.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+
+    def remaining():
+        return None if deadline is None else max(0.0, deadline - time.monotonic())
+
+    if group is not None:
+        with _background_condition:
+            futures = list(_background_groups.pop(group, []))
+
+        for future in futures:
+            try:
+                future.result(timeout=remaining())
+            except FutureTimeoutError:
+                return False
+            except Exception:
+                pass  # reported by _run_background_save
+
+        return True
+
+    with _background_condition:
+        while _background_unfinished > 0:
+            left = remaining()
+            if left is not None and left <= 0:
+                return False
+            _background_condition.wait(timeout=left)
+
+    return True
+
+
+def finish_background_saves_before_exit():
+    """Called where the program is about to end: lets the images that are still being encoded get to disk.
+
+    Returns right away if there are none. Called a second time while it waits (Ctrl+C pressed
+    again), it gives up and returns.
+    """
+    global _background_exit_requested
+
+    unfinished = background_saves_unfinished()
+    if unfinished == 0 or _background_exit_requested:
+        return
+
+    _background_exit_requested = True
+    print(f"Waiting for {unfinished} image(s) that are still being saved... (interrupt again to exit without them)")
+    wait_for_background_saves()
 
 
 IGNORED_INFO_KEYS = {

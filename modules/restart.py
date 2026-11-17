@@ -22,4 +22,15 @@ def restart_program() -> None:
 
 
 def stop_program() -> None:
+    finish_background_saves()
     os._exit(0)
+
+
+def finish_background_saves() -> None:
+    """Images that are saved in the background (option save_images_async) get written before the process ends."""
+    try:
+        from modules import images
+
+        images.finish_background_saves_before_exit()
+    except Exception as e:
+        print(f"Could not wait for images that are being saved: {e}")

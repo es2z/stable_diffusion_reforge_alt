@@ -119,7 +119,15 @@ def get_pending_tasks():
     return PendingTasksResponse(size=pending_len, tasks=pending_tasks_ids)
 
 
+saving_tasks = set()
+"""jobs that are through with generating while their images are still written in the background"""
+
+
 def progressapi(req: ProgressRequest):
+    if req.id_task in saving_tasks:
+        # the job is not over for the browser until its files are there; another job may be generating already
+        return ProgressResponse(active=True, queued=False, completed=False, progress=1, id_live_preview=-1, textinfo="Saving images...")
+
     active = req.id_task == current_task
     queued = req.id_task in pending_tasks
     completed = req.id_task in finished_tasks

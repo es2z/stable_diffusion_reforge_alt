@@ -47,13 +47,43 @@ def wrap_gradio_gpu_call(func, extra_outputs=None):
                 res = func(*args, **kwargs)
                 progress.record_results(id_task, res)
             finally:
+                # Images that are saved in the background (see images.save_images_in_background) may not
+                # be written yet. The job counts as running for the browser until they are, see below.
+                from modules import images
+
+                if id_task is not None and images.background_saves_unfinished(id_task) > 0:
+                    progress.saving_tasks.add(id_task)
+
                 progress.finish_task(id_task)
 
             shared.state.end()
 
         return res
 
-    return wrap_gradio_call(f, extra_outputs=extra_outputs, add_stats=True)
+    wrapped = wrap_gradio_call(f, extra_outputs=extra_outputs, add_stats=True)
+
+    @wraps(func)
+    def wait_for_files(*args, **kwargs):
+        """Returns the results when the files of the job are written.
+
+        This waits outside of everything above: the queue is free for the next job, which is what
+        saving in the background is for, and the state that is shared between jobs has been
+        handed on. The results are held back because the gallery shows the saved files.
+        """
+        id_task = args[0] if args and type(args[0]) == str and args[0].startswith("task(") and args[0].endswith(")") else None
+
+        try:
+            return wrapped(*args, **kwargs)
+        finally:
+            if id_task is not None:
+                from modules import images
+
+                try:
+                    images.wait_for_background_saves(id_task)
+                finally:
+                    progress.saving_tasks.discard(id_task)
+
+    return wait_for_files
 
 
 def wrap_gradio_call(func, extra_outputs=None, add_stats=False):

@@ -173,6 +173,8 @@ def webui_worker():
 
         if server_command == "stop":
             print("Stopping server...")
+            from modules import restart
+            restart.finish_background_saves()
             # If we catch a keyboard interrupt, we want to stop the server and exit.
             shared.demo.close()
             break

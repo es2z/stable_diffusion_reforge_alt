@@ -59,6 +59,8 @@ options_templates.update(options_section(('saving-images', "Saving images/grids"
     "avif_encoder": OptionInfo("aom", "AVIF encoder", gr.Dropdown, {"choices": ("aom", "svt")}).info("svt uses the SVT-AV1 encoder"),
     "avif_speed": OptionInfo(6, "AVIF encoder speed", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}).info("0 is slowest with the best compression; 10 is fastest"),
     "avif_suppress_svt_logs": OptionInfo(False, "Suppress SVT-AV1 console output").info("also hides SVT warnings and errors").needs_restart(),
+    "save_images_async": OptionInfo(False, "Save generated images in the background").info("the next batch is generated while the images of the last one are still being encoded, which pays off with slow settings such as a low AVIF encoder speed; a generation started from the UI ends when all of its files are written. Can be put at the top of the page: add it to the Quicksettings list in User interface"),
+    "save_images_async_workers": OptionInfo(0, "Background saving: images encoded at the same time", gr.Slider, {"minimum": 0, "maximum": 64, "step": 1}).info("0 = half of the CPU threads; images that wait for their turn are kept in memory"),
     "webp_lossless": OptionInfo(False, "Use lossless compression for webp images"),
     "export_for_4chan": OptionInfo(True, "Save copy of large images as JPG").info("if the file size is above the limit, or either width or height are above the limit"),
     "img_downscale_threshold": OptionInfo(4.0, "File size limit for the above option, MB", gr.Number),
