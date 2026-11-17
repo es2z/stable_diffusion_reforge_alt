@@ -17,7 +17,10 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
 
     def items_state(self):
         # Everything create_item() looks at apart from the files next to the networks.
-        model = shared.sd_model
+
+        # The checkpoint only matters while networks for other base models are hidden. It is not
+        # touched otherwise: asking for it loads one if none is loaded yet.
+        model = None if shared.opts.lora_show_all else shared.sd_model
 
         return (
             networks.available_networks_version,
