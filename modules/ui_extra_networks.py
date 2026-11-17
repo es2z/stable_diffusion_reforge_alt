@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Optional, Union
 from dataclasses import dataclass
 
-from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, errors, extra_networks, util
+from modules import shared, ui_extra_networks_user_metadata, ui_extra_networks_thumbnails, ui_extra_networks_stats, errors, extra_networks, util, infotext_utils
 from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
 import html
+from fastapi import Body
 from fastapi.exceptions import HTTPException
 from PIL import Image
 
@@ -181,6 +182,29 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0, full: boo
     return Response(content=data, media_type=media_type, headers={**cache_headers})
 
 
+def open_preview_original(source: str):
+    """Finds the original image behind the preview link of a card.
+
+    Returns (filename, None) for a preview file, (None, image) for a cover image embedded into a model.
+    """
+    parsed = urllib.parse.urlparse(source or "")
+    query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+    route = parsed.path.rsplit("/", 1)[-1]
+
+    if route == "thumb":
+        filename = query.get("filename", "")
+        check_preview_file(filename)
+        return filename, None
+
+    if route == "cover-images":
+        _, data = get_cover_image(query.get("page", ""), query.get("item", ""), int(query.get("index", 0)))
+        image = Image.open(BytesIO(data))
+        image.load()
+        return None, image
+
+    raise ValueError(f"not a preview link: {source}")
+
+
 def load_preview_for_pnginfo(source: str):
     """Turns the preview link of a card into a value for PNG Info's image component.
 
@@ -188,31 +212,52 @@ def load_preview_for_pnginfo(source: str):
     passes them on byte for byte, the same as if the user had uploaded them.
     """
     try:
-        parsed = urllib.parse.urlparse(source or "")
-        query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-        route = parsed.path.rsplit("/", 1)[-1]
-
-        if route == "thumb":
-            filename = query.get("filename", "")
-            check_preview_file(filename)
+        filename, image = open_preview_original(source)
+        if filename is not None:
             return filename
 
-        if route == "cover-images":
-            _, data = get_cover_image(query.get("page", ""), query.get("item", ""), int(query.get("index", 0)))
-            image = Image.open(BytesIO(data))
-            image.load()
+        # gradio re-encodes PIL images as PNG and keeps text chunks only; parameters stored in EXIF would get lost
+        geninfo, _ = read_info_from_image(image)
+        if geninfo and not isinstance(image.info.get("parameters"), str):
+            image.info["parameters"] = geninfo
 
-            # gradio re-encodes PIL images as PNG and keeps text chunks only; parameters stored in EXIF would get lost
-            geninfo, _ = read_info_from_image(image)
-            if geninfo and not isinstance(image.info.get("parameters"), str):
-                image.info["parameters"] = geninfo
-
-            return image
-
-        raise ValueError(f"not a preview link: {source}")
+        return image
     except Exception as e:
         errors.display(e, "sending extra network preview to PNG Info")
         return gr.update()
+
+
+def read_preview_infotext(source: str):
+    """Generation parameters of the original image behind the preview link of a card, or None."""
+    filename, image = open_preview_original(source)
+    if filename is not None:
+        with Image.open(filename) as image:
+            geninfo, _ = read_info_from_image(image)
+    else:
+        geninfo, _ = read_info_from_image(image)
+
+    return geninfo
+
+
+def create_paste_from_preview(tabname: str):
+    """Creates the hidden components behind the card button that applies a preview's parameters to the tab.
+
+    Has to be called inside the tab's Blocks, after its paste fields are registered.
+    """
+    source = gr.Textbox(visible=False, label="Extra networks paste source", elem_id=f"{tabname}_extra_networks_paste_source")
+    status = gr.Textbox(visible=False, label="Extra networks paste status", elem_id=f"{tabname}_extra_networks_paste_status")
+    source.do_not_save_to_config = True
+    status.do_not_save_to_config = True
+
+    infotext_utils.register_undoable_paste(infotext_utils.UndoablePasteBinding(
+        tabname=tabname,
+        apply_button=gr.Button("Apply preview parameters", visible=False, elem_id=f"{tabname}_extra_networks_paste_apply"),
+        undo_button=gr.Button("Undo applying preview parameters", visible=False, elem_id=f"{tabname}_extra_networks_paste_undo"),
+        source_component=source,
+        status_component=status,
+        snapshot_component=gr.State(None),
+        read_infotext=read_preview_infotext,
+    ))
 
 
 def get_metadata(page: str = "", item: str = ""):
@@ -251,6 +296,45 @@ def get_items(page: str = ""):
     return JSONResponse(page.create_items_data())
 
 
+def get_stats(page: str = ""):
+    """Usage counts and favourites of a page, for refreshing cards without listing the files again."""
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get_page(page.name)})
+
+
+def set_favorite(page: str = Body("", embed=True), name: str = Body("", embed=True), favorite: bool = Body(False, embed=True)):
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None or not name:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    ui_extra_networks_stats.set_favorite(page.name, name, favorite)
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get(page.name, name)})
+
+
+def clear_usage(page: str = Body("", embed=True), name: str = Body("", embed=True)):
+    """Forgets the usage of one item, or of all items of the page if no name is given."""
+    from starlette.responses import JSONResponse
+
+    page = get_page(page)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    if name:
+        ui_extra_networks_stats.clear_usage(page.name, name)
+    else:
+        ui_extra_networks_stats.clear_page_usage(page.name)
+
+    return JSONResponse({"stats": ui_extra_networks_stats.get_page(page.name)})
+
+
 def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     from starlette.responses import JSONResponse
 
@@ -285,6 +369,9 @@ def add_pages_to_demo(app):
     app.add_api_route("/sd_extra_networks/metadata", get_metadata, methods=["GET"])
     app.add_api_route("/sd_extra_networks/items", get_items, methods=["GET"])
     app.add_api_route("/sd_extra_networks/get-single-card", get_single_card, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/stats", get_stats, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/favorite", set_favorite, methods=["POST"])
+    app.add_api_route("/sd_extra_networks/clear-usage", clear_usage, methods=["POST"])
 
 
 def quote_js(s: str):
@@ -303,6 +390,8 @@ class ExtraNetworksPage:
         self.items = {}
         self.items_lock = threading.RLock()
         self.lister = util.MassFileLister()
+        # fields of the user metadata (the .json next to the file) that the search of the page looks into
+        self.searchable_user_metadata = ["activation text", "negative text", "notes"]
         # HTML Templates
         self.pane_tpl = shared.html("extra-networks-pane.html")
         self.pane_content_tree_tpl = shared.html("extra-networks-pane-tree.html")
@@ -740,6 +829,18 @@ class ExtraNetworksPage:
         if search_only and shared.opts.extra_networks_hidden_models == "Never":
             return None
 
+        stats = ui_extra_networks_stats.get(self.name, item["name"])
+
+        # What the user wrote about the item in "Edit metadata". Searched like the description, not shown on the card.
+        user_metadata = item.get("user_metadata") or {}
+        search_extra = [str(user_metadata[key]) for key in self.searchable_user_metadata if isinstance(user_metadata.get(key), str) and user_metadata[key].strip()]
+
+        # Base model the item is for, as the filter buttons of the page show it. What the user picked in
+        # "Edit metadata" wins: that list has names the detection does not know (Illustrious, PonyXL, ...).
+        sd_version = user_metadata.get("sd version")
+        if not isinstance(sd_version, str) or not sd_version.strip():
+            sd_version = str(item.get("sd_version", "") or "")
+
         data = {
             "name": item["name"],
             "filename": item.get("filename", "") or "",
@@ -747,10 +848,15 @@ class ExtraNetworksPage:
             "preview": item.get("preview", None) or None,
             "description": (item.get("description", "") or "") if shared.opts.extra_networks_card_show_desc else "",
             "search_terms": [str(x) for x in item.get("search_terms", [])],
+            "search_extra": search_extra,
+            "sd_version": sd_version,
             "search_only": search_only,
-            "sort_keys": item.get("sort_keys", {}),
+            "sort_keys": {**item.get("sort_keys", {}), "usage_count": stats["count"], "last_used": stats["last_used"]},
             "has_metadata": bool(item.get("metadata")),
             "tree_path": self.tree_path(item.get("filename", "")),
+            "usage_count": stats["count"],
+            "last_used": stats["last_used"],
+            "favorite": stats["favorite"],
         }
 
         onclick = item.get("onclick", None)

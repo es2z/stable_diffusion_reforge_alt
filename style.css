@@ -1285,10 +1285,11 @@ body.resizing .resize-handle {
 /* Buttons for the image behind a card's preview; shown on hover, opposite of the model's buttons. */
 .extra-network-pane .card .image-button-row {
     display: inline-flex;
+    flex-direction: column;
     visibility: hidden;
     position: absolute;
-    left: 0;
-    top: 0;
+    left: 0.25rem;
+    top: 3rem;
     z-index: 1;
 }
 
@@ -1300,7 +1301,7 @@ body.resizing .resize-handle {
     display: block;
     width: 1.5rem;
     height: 1.5rem;
-    margin: 0.35rem 0 0 0.35rem;
+    margin: 0 0 0.5rem 0.35rem;
     padding: 0;
     background-color: white;
     opacity: 0.75;
@@ -1321,6 +1322,271 @@ body.resizing .resize-handle {
 .extra-network-pane .card .open-original-button {
     -webkit-mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5H5v14h14v-6"/><path d="M15 4h5v5"/><path d="M20 4l-9 9"/></svg>');
     mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5H5v14h14v-6"/><path d="M15 4h5v5"/><path d="M20 4l-9 9"/></svg>');
+}
+
+.extra-network-pane .card .apply-params-button {
+    -webkit-mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>');
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>');
+}
+
+/* ==== EXTRA NETWORKS AS A SIDE PANEL (setting "Extra Networks display") ==== */
+.extra-networks-side-close,
+.extra-networks-side-resizer {
+    display: none;
+}
+
+@media (min-width: 1000px) {
+    /* the generation tab stays, whichever page of cards is selected */
+    .extra-networks-side > .tabitem:not(.extra-page) {
+        display: block !important;
+    }
+
+    .extra-networks-side > .tabitem.extra-page {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: var(--extra-networks-side-width, 36vw);
+        min-width: 320px;
+        max-width: 70vw;
+        z-index: 999;
+        box-sizing: border-box;
+        padding: 0.5rem 0.5rem 0.5rem 0.75rem !important;
+        overflow: hidden;
+        background: var(--body-background-fill);
+        border: none !important;
+        border-left: 1px solid var(--border-color-primary) !important;
+        box-shadow: -4px 0 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .extra-networks-side.extra-networks-side--left > .tabitem.extra-page {
+        right: auto;
+        left: 0;
+        padding: 0.5rem 0.75rem 0.5rem 0.5rem !important;
+        border-left: none !important;
+        border-right: 1px solid var(--border-color-primary) !important;
+        box-shadow: 4px 0 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .extra-networks-side > .tabitem.extra-page .extra-network-pane {
+        height: calc(100vh - 1.5rem);
+        min-height: 0;
+        resize: none;
+    }
+
+    .extra-networks-side > .tabitem.extra-page .extra-network-control {
+        flex-wrap: wrap;
+        padding-right: 2rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-close {
+        display: block;
+        position: absolute;
+        top: 0.3rem;
+        right: 0.6rem;
+        z-index: 2;
+        font-size: 1.6rem;
+        line-height: 1;
+        cursor: pointer;
+        color: var(--body-text-color-subdued);
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-close:hover {
+        color: var(--body-text-color);
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-resizer {
+        display: block;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 6px;
+        cursor: ew-resize;
+    }
+
+    .extra-networks-side.extra-networks-side--left > .tabitem.extra-page > .extra-networks-side-resizer {
+        left: auto;
+        right: 0;
+    }
+
+    .extra-networks-side > .tabitem.extra-page > .extra-networks-side-resizer:hover,
+    body.extra-networks-side-resizing .extra-networks-side-resizer {
+        background: var(--color-accent, #f97316);
+        opacity: 0.6;
+    }
+
+    /* the rest of the page moves over instead of being covered */
+    body.extra-networks-side-open-right gradio-app {
+        display: block;
+        margin-right: var(--extra-networks-side-width, 36vw);
+    }
+
+    body.extra-networks-side-open-left gradio-app {
+        display: block;
+        margin-left: var(--extra-networks-side-width, 36vw);
+    }
+
+    body.extra-networks-side-resizing {
+        user-select: none;
+    }
+}
+
+/* ==== HISTORY TAB (javascript/outputBrowser.js) ==== */
+.output-browser {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 14rem);
+    min-height: 30rem;
+}
+
+.output-browser-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+}
+
+.output-browser-bar select {
+    padding: 0.3rem 1.8rem 0.3rem 0.6rem;
+    border: 1px solid var(--input-border-color);
+    border-radius: var(--input-radius);
+    background-color: var(--input-background-fill);
+    color: var(--body-text-color);
+}
+
+.output-browser-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.output-browser-crumb {
+    color: var(--link-text-color);
+}
+
+.output-browser-crumb-sep {
+    margin: 0 0.3rem;
+    color: var(--body-text-color-subdued);
+}
+
+.output-browser-count {
+    color: var(--body-text-color-subdued);
+    white-space: nowrap;
+}
+
+.output-browser-dirs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    max-height: 5.5rem;
+    overflow-y: auto;
+    margin-bottom: 0.4rem;
+}
+
+.output-browser-dirs:empty {
+    display: none;
+}
+
+.output-browser-dirs button {
+    padding: 0.15rem 0.6rem;
+    font-size: 0.9rem;
+}
+
+.output-browser-grid {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    border: 1px solid var(--block-border-color);
+}
+
+.output-browser-status {
+    margin: 0.5em;
+}
+
+.output-browser-status:empty {
+    display: none;
+}
+
+/* as tall as all rows together; rows are placed inside it by their index */
+.output-browser-canvas {
+    position: relative;
+    width: 100%;
+}
+
+.output-browser-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-wrap: nowrap;
+}
+
+.output-browser-tile {
+    flex: none;
+    box-sizing: border-box;
+    width: 10rem;
+    height: 10rem;
+    padding: 0.2rem;
+    border: 2px solid transparent;
+    border-radius: 0.3rem;
+    cursor: pointer;
+}
+
+.output-browser-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.output-browser-tile:hover {
+    border-color: var(--border-color-primary);
+}
+
+.output-browser-tile--selected,
+.output-browser-tile--selected:hover {
+    border-color: var(--color-accent, #f97316);
+}
+
+/* Generation queue: the cancel button is only there while something waits */
+#txt2img_cancel_queue,
+#img2img_cancel_queue {
+    display: none;
+}
+
+/* Message shown after applying the parameters of a preview image */
+#extra-networks-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 2rem;
+    transform: translateX(-50%);
+    z-index: 1001;
+    display: none;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-radius: 0.5rem;
+    background: rgba(30, 30, 30, 0.92);
+    color: white;
+    font-size: 0.95rem;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+#extra-networks-toast.extra-networks-toast--shown {
+    display: flex;
+}
+
+#extra-networks-toast button {
+    padding: 0.15rem 0.7rem;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: white;
+    cursor: pointer;
 }
 
 .extra-network-pane .card .send-pnginfo-button {
@@ -1640,6 +1906,86 @@ body.resizing .resize-handle {
     mask-image: url('data:image/svg+xml,<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M13 12H21M13 8H21M13 16H21M6 7V17M6 17L3 14M6 17L9 14" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></g></svg>');
 }
 
+/* ==== USAGE AND FAVOURITES ==== */
+.extra-network-control .extra-network-control--sort[data-sortkey="usage_count"] .extra-network-control--sort-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11M12 20V4M19 20v-6"/></svg>');
+}
+
+.extra-network-control .extra-network-control--sort[data-sortkey="last_used"] .extra-network-control--sort-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>');
+}
+
+.extra-network-control .extra-network-control--favorites,
+.extra-network-control .extra-network-control--clear-usage {
+    padding: 0.25rem;
+    display: inline-flex;
+    cursor: pointer;
+    justify-self: center;
+    align-self: center;
+}
+
+.extra-network-control .extra-network-control--favorites-icon,
+.extra-network-control .extra-network-control--clear-usage-icon {
+    height: 1.5rem;
+    width: 1.5rem;
+    mask-repeat: no-repeat;
+    mask-position: center center;
+    mask-size: 100%;
+    background-color: var(--input-placeholder-color);
+}
+
+.extra-network-control .extra-network-control--favorites-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 17l-5.4 2.8 1.1-6.1L3.2 9.4l6.1-.8z"/></svg>');
+}
+
+.extra-network-control .extra-network-control--clear-usage-icon {
+    mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v5h5"/><path d="M10 15V11M13.5 15V9"/></svg>');
+}
+
+.extra-network-control .extra-network-control--clear-usage:active .extra-network-control--clear-usage-icon {
+    background-color: var(--button-secondary-text-color);
+}
+
+.extra-network-pane .card .favorite-button::before {
+    content: "☆";
+}
+
+.extra-network-pane .card.favorite .favorite-button::before {
+    content: "★";
+}
+
+.extra-network-pane .card > .favorite-button {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 1;
+    visibility: hidden;
+}
+
+/* the star of a favourite is always there; on other cards it shows while hovering */
+.extra-network-pane .card:hover > .favorite-button,
+.extra-network-pane .card.favorite > .favorite-button {
+    visibility: visible;
+}
+
+.extra-network-pane .card.favorite > .favorite-button {
+    color: #ffd24a;
+}
+
+.extra-network-pane .card .clear-usage-button::before {
+    content: "↺";
+}
+
+.extra-network-pane .card .actions .usage-count {
+    float: right;
+    margin-left: 0.5em;
+    font-size: 1.2em;
+    font-weight: 600;
+    line-height: 1.5;
+    opacity: 0.9;
+    cursor: default;
+}
+
 /* ==== TREE VIEW ICON ACTIONS ==== */
 .extra-network-control .extra-network-control--tree-view {
     padding: 0.25rem;
@@ -1768,4 +2114,33 @@ body.resizing .resize-handle {
 .extra-network-tree .tree-list-content:hover .button-row {
     visibility: visible;
     width: auto;
+}
+
+/* Base model filter of the Extra Networks pages: one small button per base model (SD1, SDXL, ...) */
+.extra-network-control .extra-network-control--versions {
+    display: inline-flex;
+    flex: none;
+    align-self: center;
+    gap: 0.2rem;
+    margin: 0 0.25rem;
+}
+
+.extra-network-control .extra-network-control--versions:empty {
+    display: none;
+}
+
+.extra-network-control .extra-network-control--version {
+    padding: 0.1rem 0.45rem;
+    font-size: 0.8rem;
+    line-height: 1.4rem;
+    white-space: nowrap;
+    cursor: pointer;
+    color: var(--input-placeholder-color);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.25rem;
+}
+
+.extra-network-control .extra-network-control--version.extra-network-control--enabled {
+    color: var(--button-secondary-text-color);
+    border-color: var(--button-secondary-text-color);
 }

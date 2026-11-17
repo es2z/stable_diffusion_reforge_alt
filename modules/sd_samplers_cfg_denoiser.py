@@ -4,7 +4,7 @@ from modules import prompt_parser, sd_samplers_common
 import modules.shared as shared
 from modules.script_callbacks import CFGDenoiserParams, cfg_denoiser_callback
 from modules.script_callbacks import AfterCFGCallbackParams, cfg_after_cfg_callback
-from modules_forge import forge_sampler
+from modules_forge import forge_sampler, lora_schedule
 from ldm_patched.modules.conds import CONDRegular
 from ldm_patched.modules.samplers import sampling_function
 
@@ -234,6 +234,9 @@ class CFGDenoiser(torch.nn.Module):
         if control is not None:
             for h in cond_patched + uncond_patched:
                 h['control'] = control
+
+        # LoRA tags inside prompt-editing brackets: put the UNet weights of this step in place
+        lora_schedule.before_step(self)
 
         for modifier in model_options.get('conditioning_modifiers', []):
             model, x, sigma, uncond_patched, cond_patched, cond_scale, model_options, seed = modifier(model, x, sigma, uncond_patched, cond_patched, cond_scale, model_options, seed)

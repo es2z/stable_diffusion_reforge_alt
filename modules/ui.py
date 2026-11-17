@@ -13,7 +13,7 @@ from PIL import Image, PngImagePlugin  # noqa: F401
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call, wrap_gradio_call_no_job # noqa: F401
 
 from modules import gradio_extensons, sd_schedulers  # noqa: F401
-from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_toprow, launch_utils
+from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_output_browser, ui_toprow, launch_utils
 from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML, InputAccordion, ResizeHandleRow
 from modules.paths import script_path
 from modules.ui_common import create_refresh_button
@@ -257,6 +257,19 @@ def create_override_settings_dropdown(tabname, row):
     )
 
     return dropdown
+
+
+def create_generation_queue_slots(tabname, generate_args):
+    """Creates hidden buttons that start the same generation as the Generate button does.
+
+    Gradio ignores a button while the job it started has not finished, so the Generate button alone
+    can not be used to line up more work. Each of these buttons is a trigger of its own; the queue
+    button presses one that is free (see enqueueGeneration in javascript/ui.js). The jobs wait for
+    each other in the same queue that jobs from several browser windows already use.
+    """
+    for i in range(int(shared.opts.generation_queue_slots)):
+        slot = gr.Button(f"Queue slot {i}", visible=False, elem_id=f"{tabname}_queue_slot_{i}")
+        slot.click(**{**generate_args, "_js": f"(...args) => submitQueuedGeneration('{tabname}', {i}, args)"})
 
 
 def create_ui():
@@ -506,6 +519,11 @@ def create_ui():
             toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
             toprow.token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
             toprow.negative_token_button.click(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])
+
+        # Hidden components go here, outside the row of the Generation tab: that row lays out its
+        # first and last child as the two resizable columns.
+        create_generation_queue_slots("txt2img", txt2img_args)
+        ui_extra_networks.create_paste_from_preview("txt2img")
 
         extra_networks_ui = ui_extra_networks.create_ui(txt2img_interface, [txt2img_generation_tab], 'txt2img')
         ui_extra_networks.setup_ui(extra_networks_ui, output_panel.gallery)
@@ -869,6 +887,10 @@ def create_ui():
             ))
 
         extra_networks_ui_img2img = ui_extra_networks.create_ui(img2img_interface, [img2img_generation_tab], 'img2img')
+        # outside the row of the Generation tab, see txt2img
+        create_generation_queue_slots("img2img", img2img_args)
+        ui_extra_networks.create_paste_from_preview("img2img")
+
         ui_extra_networks.setup_ui(extra_networks_ui_img2img, output_panel.gallery)
 
         extra_tabs.__exit__()
@@ -913,6 +935,8 @@ def create_ui():
             outputs=[image],
             show_progress=False,
         )
+
+    output_browser_interface = ui_output_browser.create_ui()
 
     modelmerger_ui = ui_checkpoint_merger.UiCheckpointMerger()
 
@@ -1137,6 +1161,7 @@ def create_ui():
         (img2img_interface, "img2img", "img2img"),
         (extras_interface, "Extras", "extras"),
         (pnginfo_interface, "PNG Info", "pnginfo"),
+        (output_browser_interface, "History", "output_browser"),
         (modelmerger_ui.blocks, "Checkpoint Merger", "modelmerger"),
         (train_interface, "Train", "train"),
     ]

@@ -56,9 +56,11 @@ var ExtraNetworksData = (function () {
         }
 
         item.index = index;
-        // the same text the search used to collect from the card's elements
+        // The text the search used to collect from the card's elements, plus what the user wrote
+        // about the item in "Edit metadata" (activation text, notes).
         item.searchText = (item.search_terms || [])
             .concat([description])
+            .concat(item.search_extra || [])
             .join(" ")
             .toLowerCase();
 
@@ -169,6 +171,51 @@ var ExtraNetworksData = (function () {
 
         updateItem: updateItem,
 
+        /**
+         * Sets usage counts and favourites from {name: {count, last_used, favorite}}.
+         * complete: the map holds every item that has any; the others are reset.
+         */
+        applyStats: function (pageName, stats, complete) {
+            var page = entry(pageName);
+            if (!page.data) return;
+
+            page.data.items.forEach(function (item) {
+                var itemStats = stats[item.name];
+                if (!itemStats) {
+                    if (!complete) return;
+                    itemStats = { count: 0, last_used: 0, favorite: false };
+                }
+
+                item.usage_count = itemStats.count;
+                item.last_used = itemStats.last_used;
+                item.favorite = itemStats.favorite;
+                item.sort_keys = item.sort_keys || {};
+                item.sort_keys.usage_count = itemStats.count;
+                item.sort_keys.last_used = itemStats.last_used;
+            });
+
+            notify(page, "ready");
+        },
+
+        /**
+         * Fetches usage counts again; they change whenever an image is generated.
+         */
+        refreshStats: function (pageName) {
+            var self = this;
+            if (!entry(pageName).data) return;
+
+            requestGet(
+                "./sd_extra_networks/stats",
+                { page: pageName },
+                function (data) {
+                    if (data && data.stats) {
+                        self.applyStats(pageName, data.stats, true);
+                    }
+                },
+                function () {}
+            );
+        },
+
         /** Returns what the server sent for the page, or null while it is not loaded. */
         get: function (pageName) {
             return entry(pageName).data;
@@ -206,6 +253,8 @@ var ExtraNetworksGrid = (function () {
     var CONFIG = {
         // Rows kept ready above and below the visible ones.
         OVERSCAN_ROWS: 2,
+        // Views (search + sort + favourites filter) whose scroll position is remembered.
+        REMEMBERED_VIEWS: 50,
     };
 
     var instances = {};
@@ -246,7 +295,12 @@ var ExtraNetworksGrid = (function () {
         return preview + "&full=1";
     }
 
-    function compareBy(sortKey) {
+    // Sort keys whose natural order is "largest first": the most used and the most recently used on top.
+    var LARGEST_FIRST = { usage_count: true, last_used: true };
+
+    function compareBy(sortKey, descending) {
+        var direction = (descending ? -1 : 1) * (LARGEST_FIRST[sortKey] ? -1 : 1);
+
         return function (a, b) {
             var av = a.sort_keys ? a.sort_keys[sortKey] : undefined;
             var bv = b.sort_keys ? b.sort_keys[sortKey] : undefined;
@@ -262,8 +316,42 @@ var ExtraNetworksGrid = (function () {
                 result = av < bv ? -1 : av > bv ? 1 : 0;
             }
 
-            return result || a.index - b.index;
+            // equal items keep their original order, whatever the direction
+            return direction * result || a.index - b.index;
         };
+    }
+
+    /**
+     * Splits what was typed into the search field into the words that all have to be found.
+     * "Quotes" keep words together: `ink "series a"` -> ["ink", "series a"].
+     */
+    function searchWords(text) {
+        var words = [];
+        var re = /"([^"]*)"?|(\S+)/g;
+        var match;
+        while ((match = re.exec(text)) !== null) {
+            var word = match[1] !== undefined ? match[1] : match[2];
+            if (word) words.push(word);
+        }
+        return words;
+    }
+
+    function formatTime(timestamp) {
+        var d = new Date(timestamp * 1000);
+        var pad = function (n) {
+            return (n < 10 ? "0" : "") + n;
+        };
+        return (
+            d.getFullYear() +
+            "-" +
+            pad(d.getMonth() + 1) +
+            "-" +
+            pad(d.getDate()) +
+            " " +
+            pad(d.getHours()) +
+            ":" +
+            pad(d.getMinutes())
+        );
     }
 
     function Grid(tabname, pageName) {
@@ -276,10 +364,15 @@ var ExtraNetworksGrid = (function () {
         this.view = {
             term: "",
             useRegex: false,
+            literal: false,
             sortKey: "default",
             descending: false,
+            favoritesOnly: false,
+            versions: [],
         };
         this.viewKey = null;
+        this.scrollPositions = new Map(); // view key -> where that view was scrolled to when it was left
+        this.pendingScrollTop = null; // position to go to once the new list has its height
 
         this.scroller = null; // #<tab>_<page>_cards, the element that scrolls
         this.canvas = null; // has the height of all rows together
@@ -363,19 +456,39 @@ var ExtraNetworksGrid = (function () {
         },
 
         /**
-         * Sets search and sort. Scrolls back to the top when they change.
+         * Sets search, sort and the favourites filter. A view that has not been shown before starts at
+         * the top; coming back to one (favourites off again, the previous sort, a cleared search, a
+         * directory opened earlier) returns to where it was left.
          */
         setView: function (view) {
             var viewKey = JSON.stringify(view);
             if (viewKey === this.viewKey) return;
 
             var isFirst = this.viewKey === null;
+            if (!isFirst && this.scroller) {
+                this.scrollPositions.delete(this.viewKey);
+                if (this.scroller.scrollTop > 0) {
+                    this.scrollPositions.set(
+                        this.viewKey,
+                        this.scroller.scrollTop
+                    );
+                    if (this.scrollPositions.size > CONFIG.REMEMBERED_VIEWS) {
+                        this.scrollPositions.delete(
+                            this.scrollPositions.keys().next().value
+                        );
+                    }
+                }
+            }
+
             this.view = view;
             this.viewKey = viewKey;
 
             if (!this.data || !this.mount()) return;
 
-            if (!isFirst) this.scroller.scrollTop = 0;
+            // applied by layout(): the list being left may be shorter than the position to return to
+            if (!isFirst) {
+                this.pendingScrollTop = this.scrollPositions.get(viewKey) || 0;
+            }
             this.update();
         },
 
@@ -402,20 +515,35 @@ var ExtraNetworksGrid = (function () {
                     };
                 }
             } else {
-                term = term.toLowerCase();
+                // A directory picked in the tree or with the directory buttons is looked for as it
+                // is; text that was typed is taken word by word, and every word has to be there.
+                var words = view.literal
+                    ? [term.toLowerCase()]
+                    : searchWords(term.toLowerCase());
                 matches = function (text) {
-                    return text.indexOf(term) !== -1;
+                    for (var i = 0; i < words.length; i++) {
+                        if (text.indexOf(words[i]) === -1) return false;
+                    }
+                    return true;
                 };
             }
 
+            var versions = view.versions || [];
+
             var items = this.data.items.filter(function (item) {
+                if (view.favoritesOnly && !item.favorite) return false;
+                if (
+                    versions.length &&
+                    versions.indexOf(item.sd_version || "") === -1
+                ) {
+                    return false;
+                }
                 // items in hidden directories only show up when searched for
                 if (item.search_only && term.length < 4) return false;
                 return matches(item.searchText);
             });
 
-            items.sort(compareBy(view.sortKey));
-            if (view.descending) items.reverse();
+            items.sort(compareBy(view.sortKey, view.descending));
 
             this.visibleItems = items;
             this.measured = false; // options that set the card size arrive with the data
@@ -506,6 +634,11 @@ var ExtraNetworksGrid = (function () {
 
             var rowCount = Math.ceil(this.visibleItems.length / columns);
             this.canvas.style.height = rowCount * this.rowHeight + "px";
+
+            if (this.pendingScrollTop !== null) {
+                this.scroller.scrollTop = this.pendingScrollTop;
+                this.pendingScrollTop = null;
+            }
 
             if (this.stale) {
                 this.rows.forEach(discardRow);
@@ -600,7 +733,7 @@ var ExtraNetworksGrid = (function () {
             var tabname = this.tabname;
             var pageName = this.pageName;
 
-            var card = el("div", "card");
+            var card = el("div", item.favorite ? "card favorite" : "card");
             if (data.card_style) card.setAttribute("style", data.card_style);
             card.setAttribute("data-name", item.name);
             Object.keys(item.sort_keys || {}).forEach(function (key) {
@@ -646,10 +779,52 @@ var ExtraNetworksGrid = (function () {
                     send.setAttribute("data-preview", item.preview);
                     imageButtons.appendChild(send);
                 }
+
+                if (
+                    PREVIEW_ROUTES.test(item.preview) &&
+                    gradioApp().getElementById(
+                        tabname + "_extra_networks_paste_apply"
+                    )
+                ) {
+                    var apply = cardButton(
+                        "div",
+                        "apply-params-button",
+                        "Apply the generation parameters of the preview image to this tab (Ctrl+Z to undo)",
+                        "extraNetworksApplyPreviewParams(event, '" +
+                            tabname +
+                            "')"
+                    );
+                    apply.setAttribute("data-preview", item.preview);
+                    imageButtons.appendChild(apply);
+                }
                 card.appendChild(imageButtons);
             }
 
+            // In the corner of its own: it stays visible on a favourite, on other cards it shows up while hovering.
+            card.appendChild(
+                cardButton(
+                    "div",
+                    "favorite-button",
+                    item.favorite
+                        ? "Remove from favorites (Shift+H)"
+                        : "Add to favorites (Shift+H)",
+                    "extraNetworksToggleFavorite(event, '" + pageName + "')"
+                )
+            );
+
             var buttons = el("div", "button-row");
+            if (item.usage_count > 0) {
+                buttons.appendChild(
+                    cardButton(
+                        "div",
+                        "clear-usage-button",
+                        "Clear usage count of this card (" +
+                            item.usage_count +
+                            ")",
+                        "extraNetworksClearUsage(event, '" + pageName + "')"
+                    )
+                );
+            }
             var copyPath = cardButton(
                 "div",
                 "copy-path-button",
@@ -685,6 +860,19 @@ var ExtraNetworksGrid = (function () {
             card.appendChild(buttons);
 
             var actions = el("div", "actions");
+            if (item.usage_count > 0) {
+                var usage = el("span", "usage-count");
+                usage.textContent = "\u00d7" + item.usage_count;
+                usage.title =
+                    "Used " +
+                    item.usage_count +
+                    " time" +
+                    (item.usage_count == 1 ? "" : "s") +
+                    (item.last_used
+                        ? ", last on " + formatTime(item.last_used)
+                        : "");
+                actions.appendChild(usage);
+            }
             var additional = el("div", "additional");
             (item.search_terms || []).forEach(function (term) {
                 var span = el(
@@ -1099,6 +1287,72 @@ function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
     });
 }
 
+// Base models in the order their filter buttons are shown; names that are not listed follow in alphabetical order.
+var extraNetworksVersionOrder = [
+    "SD1",
+    "SD2",
+    "SDXL",
+    "Illustrious",
+    "Noob",
+    "PonyXL",
+    "Unknown",
+];
+
+/**
+ * Fills the base model filter of a page: one button per base model its items are for. Several can
+ * be on at once; with none on, everything is shown. Pages whose items are all for the same base
+ * model (or do not say) get no buttons.
+ */
+function extraNetworksRenderVersions(tabname, extra_networks_tabname, data) {
+    var tabname_full = tabname + "_" + extra_networks_tabname;
+    var container = gradioApp().getElementById(tabname_full + "_extra_versions");
+    if (!container) return;
+
+    var found = {};
+    (data.items || []).forEach(function (item) {
+        if (item.sd_version) found[item.sd_version] = true;
+    });
+    var versions = Object.keys(found).sort(function (a, b) {
+        var ia = extraNetworksVersionOrder.indexOf(a);
+        var ib = extraNetworksVersionOrder.indexOf(b);
+        if (ia !== ib) {
+            return (ia === -1 ? 1000 : ia) - (ib === -1 ? 1000 : ib);
+        }
+        return a < b ? -1 : a > b ? 1 : 0;
+    });
+    if (versions.length < 2) versions = [];
+
+    var signature = JSON.stringify(versions);
+    if (container.dataset.versions === signature) return;
+    container.dataset.versions = signature;
+
+    var enabled = {};
+    container
+        .querySelectorAll(".extra-network-control--enabled")
+        .forEach(function (chip) {
+            enabled[chip.dataset.version] = true;
+        });
+    var hadEnabled = Object.keys(enabled).length > 0;
+
+    container.textContent = "";
+    versions.forEach(function (version) {
+        var chip = document.createElement("div");
+        chip.className =
+            "extra-network-control--version" +
+            (enabled[version] ? " extra-network-control--enabled" : "");
+        chip.dataset.version = version;
+        chip.textContent = version;
+        chip.addEventListener("click", function () {
+            chip.classList.toggle("extra-network-control--enabled");
+            applyExtraNetworkFilter(tabname_full);
+        });
+        container.appendChild(chip);
+    });
+
+    // a base model that was filtered for is gone from the list: the filter goes with its button
+    if (hadEnabled) applyExtraNetworkFilter(tabname_full);
+}
+
 /**
  * Asks the server for the items of all pages again and redraws the cards in every tab.
  */
@@ -1163,13 +1417,39 @@ function setupExtraNetworksForTab(tabname) {
                         "_controls .extra-network-control--sort.extra-network-control--enabled"
                 );
 
+                var favorites = gradioApp().querySelector(
+                    "#" + tabname_full + "_extra_favorites"
+                );
+
+                var versions = [];
+                gradioApp()
+                    .querySelectorAll(
+                        "#" +
+                            tabname_full +
+                            "_extra_versions .extra-network-control--version.extra-network-control--enabled"
+                    )
+                    .forEach(function (chip) {
+                        versions.push(chip.dataset.version);
+                    });
+
                 grid.setView({
                     term: search.value,
                     useRegex: !!(regexCheckbox && regexCheckbox.checked),
+                    // set by a click on a directory; typing anything makes it ordinary search text again
+                    literal:
+                        search.value !== "" &&
+                        search.dataset.literal === search.value,
+                    versions: versions,
                     sortKey: activeSortElem
                         ? activeSortElem.dataset.sortkey
                         : "default",
                     descending: sort_dir.dataset.sortdir == "Descending",
+                    favoritesOnly: !!(
+                        favorites &&
+                        favorites.classList.contains(
+                            "extra-network-control--enabled"
+                        )
+                    ),
                 });
             };
 
@@ -1201,6 +1481,7 @@ function setupExtraNetworksForTab(tabname) {
                 grid.setState(state);
                 if (state.status === "ready") {
                     extraNetworksRenderDirs(tabname, pageName, state.data);
+                    extraNetworksRenderVersions(tabname, pageName, state.data);
                     ExtraNetworksTree.render(tabname, pageName, state.data);
                 }
             });
@@ -1215,6 +1496,8 @@ function setupExtraNetworksForTab(tabname) {
                 extraNetworksShowControlsForPage(tabname, tabname_full);
             }
         });
+
+    extraNetworksApplyPanelMode();
 
     registerPrompt(tabname, tabname + "_prompt");
     registerPrompt(tabname, tabname + "_neg_prompt");
@@ -1271,6 +1554,168 @@ function extraNetworksUnrelatedTabSelected(tabname) {
     extraNetworksShowControlsForPage(tabname, null);
 }
 
+// ============================================================================
+// Display mode: tabs, or a panel at the side
+// ============================================================================
+
+/** "tabs", "right" or "left", from the setting "Extra Networks display". */
+function extraNetworksPanelMode() {
+    var mode = (window.opts && opts.extra_networks_panel_mode) || "Tabs";
+    if (mode.indexOf("right") != -1) return "right";
+    if (mode.indexOf("left") != -1) return "left";
+    return "tabs";
+}
+
+/**
+ * Puts the pages of cards into the mode the setting asks for. Can be called any number of times.
+ *
+ * In tabs mode the search and sort controls of the open page sit in the row of tab buttons. In
+ * side panel mode every page keeps its controls at its own top, and CSS shows the open page as a
+ * panel fixed to the side while the "Generation" tab stays visible.
+ */
+function extraNetworksApplyPanelMode() {
+    var mode = extraNetworksPanelMode();
+    var side = mode != "tabs";
+
+    ["txt2img", "img2img"].forEach(function (tabname) {
+        var tabs = gradioApp().getElementById(tabname + "_extra_tabs");
+        if (!tabs) return;
+
+        tabs.classList.toggle("extra-networks-side", side);
+        tabs.classList.toggle("extra-networks-side--left", mode == "left");
+
+        var controlsDiv = tabs.querySelector(
+            ":scope > .tab-nav > .extra-networks-controls-div"
+        );
+
+        tabs.querySelectorAll(":scope > .tabitem.extra-page").forEach(
+            function (page) {
+                var pane = page.querySelector(".extra-network-pane");
+                if (!pane) return;
+
+                var tabname_full = pane.id.replace(/_pane$/, "");
+                var controls = gradioApp().getElementById(
+                    tabname_full + "_controls"
+                );
+                if (!controls) return;
+
+                if (side) {
+                    if (controls.parentElement !== pane) {
+                        pane.insertBefore(controls, pane.firstChild);
+                    }
+                    controls.style.display = "";
+                } else if (controlsDiv) {
+                    if (controls.parentElement !== controlsDiv) {
+                        controlsDiv.insertBefore(controls, null);
+                    }
+                    controls.style.display =
+                        page.style.display != "none" ? "" : "none";
+                }
+
+                // what the panel needs on top of the page: a way to close it and an edge to drag
+                if (!page.querySelector(":scope > .extra-networks-side-close")) {
+                    var close = document.createElement("div");
+                    close.className = "extra-networks-side-close";
+                    close.title = "Close the panel";
+                    close.textContent = "\u00d7";
+                    close.addEventListener("click", function () {
+                        var first = tabs.querySelector(
+                            ":scope > .tab-nav > button"
+                        );
+                        if (first) first.click();
+                    });
+                    page.appendChild(close);
+
+                    var resizer = document.createElement("div");
+                    resizer.className = "extra-networks-side-resizer";
+                    resizer.title = "Drag to resize the panel";
+                    resizer.addEventListener(
+                        "mousedown",
+                        extraNetworksSidePanelResizeStart
+                    );
+                    page.appendChild(resizer);
+                }
+            }
+        );
+    });
+
+    var width = parseInt(localGet("extra_networks_side_width"));
+    if (width > 0) {
+        document.documentElement.style.setProperty(
+            "--extra-networks-side-width",
+            width + "px"
+        );
+    }
+
+    extraNetworksUpdateSidePanelLayout();
+}
+
+/**
+ * Makes room for the panel beside the page content while a panel is open and visible.
+ */
+function extraNetworksUpdateSidePanelLayout() {
+    var mode = extraNetworksPanelMode();
+    var open = false;
+
+    if (mode != "tabs") {
+        gradioApp()
+            .querySelectorAll(".extra-networks-side > .tabitem.extra-page")
+            .forEach(function (page) {
+                // an open page of the tab that is on screen
+                if (page.getClientRects().length > 0) open = true;
+            });
+    }
+
+    document.body.classList.toggle(
+        "extra-networks-side-open-right",
+        open && mode == "right"
+    );
+    document.body.classList.toggle(
+        "extra-networks-side-open-left",
+        open && mode == "left"
+    );
+}
+
+function extraNetworksSidePanelResizeStart(event) {
+    event.preventDefault();
+
+    var left = extraNetworksPanelMode() == "left";
+    var onMove = function (moveEvent) {
+        var width = left
+            ? moveEvent.clientX
+            : window.innerWidth - moveEvent.clientX;
+        width = Math.max(
+            320,
+            Math.min(width, Math.round(window.innerWidth * 0.7))
+        );
+        document.documentElement.style.setProperty(
+            "--extra-networks-side-width",
+            width + "px"
+        );
+        localSet("extra_networks_side_width", width);
+    };
+    var onUp = function () {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("extra-networks-side-resizing");
+    };
+
+    document.body.classList.add("extra-networks-side-resizing");
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+}
+
+// Panels open and close with the tab buttons, and are only on screen with their main tab.
+document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest(".tab-nav")) {
+        setTimeout(extraNetworksUpdateSidePanelLayout, 0);
+        setTimeout(extraNetworksUpdateSidePanelLayout, 150);
+    }
+});
+window.addEventListener("resize", extraNetworksUpdateSidePanelLayout);
+
+onOptionsChanged(extraNetworksApplyPanelMode);
+
 function extraNetworksTabSelected(
     tabname,
     id,
@@ -1278,8 +1723,24 @@ function extraNetworksTabSelected(
     showNegativePrompt,
     tabname_full
 ) {
-    extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt);
+    if (extraNetworksPanelMode() != "tabs") {
+        // the generation tab stays visible beside the panel, and the prompts stay with it
+        extraNetworksMovePromptToTab(tabname, "", false, false);
+    } else {
+        extraNetworksMovePromptToTab(
+            tabname,
+            id,
+            showPrompt,
+            showNegativePrompt
+        );
+    }
     extraNetworksShowControlsForPage(tabname, tabname_full);
+    extraNetworksUpdateSidePanelLayout();
+
+    // usage counts change while generating; opening the page is when they get looked at
+    if (tabname_full) {
+        ExtraNetworksData.refreshStats(tabname_full.slice(tabname.length + 1));
+    }
 }
 
 function applyExtraNetworkFilter(tabname_full) {
@@ -1456,6 +1917,8 @@ function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
         ? ""
         : button.textContent.trim();
 
+    // the name of a directory is looked for as a whole, spaces included
+    searchTextarea.dataset.literal = text;
     searchTextarea.value = text;
     updateInput(searchTextarea);
 }
@@ -1499,6 +1962,8 @@ function extraNetworksTreeProcessDirectoryClick(
         var search_input_elem = gradioApp().querySelector(
             "#" + tabname + "_" + extra_networks_tabname + "_extra_search"
         );
+        // the path of a directory is looked for as a whole, spaces included
+        search_input_elem.dataset.literal = _search_text;
         search_input_elem.value = _search_text;
         updateInput(search_input_elem);
     }
@@ -1582,6 +2047,132 @@ function extraNetworksControlSortOnClick(
     self.classList.add("extra-network-control--enabled");
 
     applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+
+    if (
+        self.dataset.sortkey == "usage_count" ||
+        self.dataset.sortkey == "last_used"
+    ) {
+        // counted on the server while generating; get the current numbers
+        ExtraNetworksData.refreshStats(extra_networks_tabname);
+    }
+}
+
+function extraNetworksControlFavoritesOnClick(
+    event,
+    tabname,
+    extra_networks_tabname
+) {
+    event.currentTarget.classList.toggle("extra-network-control--enabled");
+    applyExtraNetworkFilter(tabname + "_" + extra_networks_tabname);
+}
+
+function extraNetworksPostJson(url, body, handler) {
+    fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    })
+        .then(function (response) {
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            return response.json();
+        })
+        .then(handler)
+        .catch(function (error) {
+            console.error("Extra Networks:", url, error);
+        });
+}
+
+/**
+ * Controls button: forgets the usage counts of all cards of the page. Favourites are kept.
+ * The server keeps the previous numbers in extra_networks_stats.json.bak.
+ */
+function extraNetworksControlClearUsageOnClick(
+    event,
+    tabname,
+    extra_networks_tabname
+) {
+    // All cards of the page at once: asked first.
+    var data = ExtraNetworksData.get(extra_networks_tabname);
+    var used = data
+        ? data.items.filter(function (item) {
+            return item.usage_count > 0;
+        }).length
+        : 0;
+    if (
+        !confirm(
+            "Clear the usage counts of all cards on this page (" +
+                used +
+                " with a count)?\nFavorites are kept."
+        )
+    ) {
+        return;
+    }
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/clear-usage",
+        { page: extra_networks_tabname, name: "" },
+        function (data) {
+            ExtraNetworksData.applyStats(
+                extra_networks_tabname,
+                data.stats || {},
+                true
+            );
+        }
+    );
+}
+
+/**
+ * Card button: forgets the usage count of this card only.
+ */
+function extraNetworksClearUsage(event, extra_networks_tabname) {
+    event.stopPropagation();
+
+    var name =
+        event.target.parentElement.parentElement.getAttribute("data-name");
+
+    // 確認ダイアログ(既定では無効)。有効にする場合は次の3行のコメントを外してください。
+    // if (!confirm("Clear the usage count of " + name + "?")) {
+    //     return;
+    // }
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/clear-usage",
+        { page: extra_networks_tabname, name: name },
+        function (data) {
+            ExtraNetworksData.applyStats(
+                extra_networks_tabname,
+                data.stats || {},
+                true
+            );
+        }
+    );
+}
+
+/**
+ * Card button: adds the card to the favourites, or removes it.
+ */
+function extraNetworksToggleFavorite(event, extra_networks_tabname) {
+    event.stopPropagation();
+
+    extraNetworksToggleFavoriteByName(
+        extra_networks_tabname,
+        event.target.closest(".card").getAttribute("data-name")
+    );
+}
+
+function extraNetworksToggleFavoriteByName(extra_networks_tabname, name) {
+    var item = ExtraNetworksData.getItem(extra_networks_tabname, name);
+    if (!item) return;
+
+    extraNetworksPostJson(
+        "./sd_extra_networks/favorite",
+        { page: extra_networks_tabname, name: name, favorite: !item.favorite },
+        function (data) {
+            var stats = {};
+            stats[name] = data.stats;
+            ExtraNetworksData.applyStats(extra_networks_tabname, stats, false);
+        }
+    );
 }
 
 function extraNetworksControlSortDirOnClick(
@@ -1895,6 +2486,147 @@ function extraNetworksRefreshSingleCard(page, tabname, name) {
     );
 }
 
+// ============================================================================
+// Applying the parameters of a preview image, with undo
+// ============================================================================
+
+// tab name -> true while Ctrl+Z would take the last "apply" back
+var extraNetworksPasteUndoArmed = {};
+
+function extraNetworksToast(text, actionLabel, action) {
+    var toast = document.getElementById("extra-networks-toast");
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "extra-networks-toast";
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = text;
+    if (actionLabel) {
+        var button = document.createElement("button");
+        button.textContent = actionLabel;
+        button.addEventListener("click", action);
+        toast.appendChild(button);
+    }
+
+    toast.classList.add("extra-networks-toast--shown");
+    clearTimeout(toast.hideTimer);
+    toast.hideTimer = setTimeout(extraNetworksHideToast, 8000);
+}
+
+function extraNetworksHideToast() {
+    var toast = document.getElementById("extra-networks-toast");
+    if (toast) toast.classList.remove("extra-networks-toast--shown");
+}
+
+/**
+ * Card button: fills the tab's fields from the generation parameters of the card's preview image,
+ * the same as sending that image to the tab from PNG Info.
+ */
+function extraNetworksApplyPreviewParams(event, tabname) {
+    event.stopPropagation();
+
+    var button = event.target.closest(".card-button");
+    var source = gradioApp().querySelector(
+        "#" + tabname + "_extra_networks_paste_source textarea, #" +
+            tabname + "_extra_networks_paste_source input"
+    );
+    var apply = gradioApp().getElementById(
+        tabname + "_extra_networks_paste_apply"
+    );
+    if (!button || !source || !apply) return;
+
+    source.value = button.getAttribute("data-preview");
+    updateInput(source);
+    apply.click();
+}
+
+function extraNetworksUndoPreviewParams(tabname) {
+    var undo = gradioApp().getElementById(
+        tabname + "_extra_networks_paste_undo"
+    );
+    if (!undo || !extraNetworksPasteUndoArmed[tabname]) return;
+
+    extraNetworksPasteUndoArmed[tabname] = false;
+    undo.click();
+}
+
+/**
+ * Called by the server side once an apply or an undo is through.
+ */
+function extraNetworksPasteFinished(tabname, status) {
+    if (status == "applied") {
+        extraNetworksPasteUndoArmed[tabname] = true;
+        extraNetworksToast(
+            "Parameters of the preview image applied. Ctrl+Z takes it back.",
+            "Undo",
+            function () {
+                extraNetworksUndoPreviewParams(tabname);
+            }
+        );
+    } else if (status == "undone") {
+        extraNetworksPasteUndoArmed[tabname] = false;
+        extraNetworksToast("Previous parameters restored.");
+    } else {
+        extraNetworksToast(
+            "The preview image has no generation parameters."
+        );
+    }
+}
+
+function extraNetworksVisibleGenerationTab() {
+    var names = ["txt2img", "img2img"];
+    for (var i = 0; i < names.length; i++) {
+        var tab = gradioApp().getElementById("tab_" + names[i]);
+        if (tab && tab.style.display != "none") return names[i];
+    }
+    return null;
+}
+
+// Ctrl+Z right after applying takes the whole apply back, wherever the focus is.
+window.addEventListener(
+    "keydown",
+    function (event) {
+        if (
+            !(event.ctrlKey || event.metaKey) ||
+            event.shiftKey ||
+            event.altKey ||
+            (event.key != "z" && event.key != "Z")
+        ) {
+            return;
+        }
+
+        var tabname = extraNetworksVisibleGenerationTab();
+        if (!tabname || !extraNetworksPasteUndoArmed[tabname]) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        extraNetworksUndoPreviewParams(tabname);
+    },
+    true
+);
+
+// Once the user changes something by hand, Ctrl+Z belongs to that edit again.
+["input", "change"].forEach(function (type) {
+    window.addEventListener(
+        type,
+        function (event) {
+            if (!event.isTrusted) return;
+
+            ["txt2img", "img2img"].forEach(function (tabname) {
+                if (!extraNetworksPasteUndoArmed[tabname]) return;
+
+                var tab = gradioApp().getElementById("tab_" + tabname);
+                if (tab && tab.contains(event.target)) {
+                    extraNetworksPasteUndoArmed[tabname] = false;
+                    extraNetworksHideToast();
+                }
+            });
+        },
+        true
+    );
+});
+
 /**
  * Switches the main tabs to the one with the given element id, e.g. "tab_pnginfo".
  */
@@ -1937,6 +2669,84 @@ window.addEventListener("keydown", function (event) {
     if (event.key == "Escape") {
         closePopup();
     }
+});
+
+// ============================================================================
+// Keyboard shortcuts of the card pages
+// ============================================================================
+
+/**
+ * The page of cards that is on screen: {tabname, pageName, tabnameFull, element}, or null.
+ * In tabs mode that is the open Lora / Checkpoints / ... tab, in side panel mode the open panel.
+ */
+function extraNetworksVisiblePage() {
+    var tabname = extraNetworksVisibleGenerationTab();
+    if (!tabname) return null;
+
+    var pages = gradioApp().querySelectorAll(
+        "#" + tabname + "_extra_tabs > .tabitem.extra-page"
+    );
+    for (var i = 0; i < pages.length; i++) {
+        if (pages[i].getClientRects().length > 0) {
+            return {
+                tabname: tabname,
+                pageName: pages[i].id.slice(tabname.length + 1),
+                tabnameFull: pages[i].id,
+                element: pages[i],
+            };
+        }
+    }
+    return null;
+}
+
+/** True while the key belongs to something the user is writing in. */
+function extraNetworksIsTyping(event) {
+    var target =
+        (event.composedPath && event.composedPath()[0]) || event.target;
+    if (!target || !target.tagName) return false;
+
+    if (target.isContentEditable) return true;
+    if (target.tagName == "TEXTAREA" || target.tagName == "SELECT") return true;
+
+    return (
+        target.tagName == "INPUT" &&
+        !/^(checkbox|radio|button|range|submit|reset)$/i.test(target.type)
+    );
+}
+
+// H: favourites only <-> all cards, for the page of cards that is open.
+// Shift+H: adds the card under the mouse pointer to the favourites, or removes it.
+window.addEventListener("keydown", function (event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    if (event.key != "h" && event.key != "H") return;
+    if (extraNetworksIsTyping(event)) return;
+
+    // a popup (metadata editor) or the full page image viewer is in front of the cards
+    if (globalPopup && globalPopup.style.display != "none") return;
+    var lightbox = gradioApp().getElementById("lightboxModal");
+    if (lightbox && lightbox.style.display && lightbox.style.display != "none") {
+        return;
+    }
+
+    var page = extraNetworksVisiblePage();
+    if (!page) return;
+
+    if (event.shiftKey) {
+        var card = page.element.querySelector(".card:hover");
+        if (!card) return;
+        extraNetworksToggleFavoriteByName(
+            page.pageName,
+            card.getAttribute("data-name")
+        );
+    } else {
+        var favorites = gradioApp().getElementById(
+            page.tabnameFull + "_extra_favorites"
+        );
+        if (!favorites) return;
+        favorites.click();
+    }
+
+    event.preventDefault();
 });
 
 // ============================================================================

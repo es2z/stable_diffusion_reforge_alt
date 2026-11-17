@@ -14,6 +14,7 @@
                 class="extra-network-control--search-text"
                 type="search"
                 placeholder="Search"
+                title="Words separated by spaces must all match, in any order. &quot;Quotes&quot; keep words together. Looks into path, hash, description, activation text and notes."
             >
         </div>
 
@@ -54,6 +55,24 @@
         >
             <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
         </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_usage_count"
+            class="extra-network-control--sort"
+            data-sortkey="usage_count"
+            title="Sort by usage count (most used first)"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_sort_last_used"
+            class="extra-network-control--sort"
+            data-sortkey="last_used"
+            title="Sort by last use (most recent first)"
+            onclick="extraNetworksControlSortOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--sort-icon"></i>
+        </div>
 
         <small> </small>
         <div
@@ -68,6 +87,27 @@
 
 
         <small> </small>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_favorites"
+            class="extra-network-control--favorites"
+            title="Show favorites only (H)"
+            onclick="extraNetworksControlFavoritesOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--favorites-icon"></i>
+        </div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_versions"
+            class="extra-network-control--versions"
+            title="Show only cards made for these base models"
+        ></div>
+        <div
+            id="{tabname}_{extra_networks_tabname}_extra_clear_usage"
+            class="extra-network-control--clear-usage"
+            title="Clear the usage counts of all cards on this page"
+            onclick="extraNetworksControlClearUsageOnClick(event, '{tabname}', '{extra_networks_tabname}');"
+        >
+            <i class="extra-network-control--icon extra-network-control--clear-usage-icon"></i>
+        </div>
         <div
             id="{tabname}_{extra_networks_tabname}_extra_tree_view"
             class="extra-network-control--tree-view {tree_view_btn_extra_class}"

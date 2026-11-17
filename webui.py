@@ -86,7 +86,7 @@ def webui_worker():
 
     launch_api = cmd_opts.api
 
-    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks
+    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks, ui_output_browser
 
     warning_if_invalid_install_dir()
 
@@ -149,6 +149,7 @@ def webui_worker():
             create_api(app)
 
         ui_extra_networks.add_pages_to_demo(app)
+        ui_output_browser.add_api(app)
 
         startup_timer.record("add APIs")
 

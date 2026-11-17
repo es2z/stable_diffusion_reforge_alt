@@ -52,9 +52,39 @@ def record_results(id_task, res):
 def add_task_to_queue(id_job):
     pending_tasks[id_job] = time.time()
 
+
+cancelled_tasks = set()
+
+
+def cancel_queued_tasks(id_tasks):
+    """Marks jobs that are still waiting for their turn as cancelled; a job that is already running is not affected."""
+    cancelled = [x for x in id_tasks if x in pending_tasks]
+    cancelled_tasks.update(cancelled)
+
+    return cancelled
+
+
+def take_cancelled(id_task):
+    """Called when a job gets its turn: tells whether it was cancelled while waiting, and forgets about it."""
+    if id_task in cancelled_tasks:
+        cancelled_tasks.discard(id_task)
+        pending_tasks.pop(id_task, None)
+        finished_tasks.append(id_task)
+        return True
+
+    return False
+
 class PendingTasksResponse(BaseModel):
     size: int = Field(title="Pending task size")
     tasks: List[str] = Field(title="Pending task ids")
+
+class CancelQueuedRequest(BaseModel):
+    id_tasks: List[str] = Field(default=[], title="Task IDs", description="ids of the waiting tasks to cancel")
+
+
+class CancelQueuedResponse(BaseModel):
+    cancelled: List[str] = Field(title="Tasks that were waiting and will not run")
+
 
 class ProgressRequest(BaseModel):
     id_task: str = Field(default=None, title="Task ID", description="id of the task to get progress for")
@@ -73,8 +103,13 @@ class ProgressResponse(BaseModel):
     textinfo: str = Field(default=None, title="Info text", description="Info text used by WebUI.")
 
 
+def cancel_queued_api(req: CancelQueuedRequest):
+    return CancelQueuedResponse(cancelled=cancel_queued_tasks(req.id_tasks))
+
+
 def setup_progress_api(app):
     app.add_api_route("/internal/pending-tasks", get_pending_tasks, methods=["GET"])
+    app.add_api_route("/internal/cancel-queued", cancel_queued_api, methods=["POST"], response_model=CancelQueuedResponse)
     return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=ProgressResponse)
 
 

@@ -6,6 +6,7 @@ from PIL import Image
 from modules import devices, images, sd_vae_approx, sd_samplers, sd_vae_taesd, shared, sd_models
 from modules.shared import opts, state
 from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
+from modules_forge import lora_schedule
 from modules import extra_networks
 if opts.sd_sampling == "A1111":
     from k_diff.k_diffusion import sampling
@@ -318,6 +319,9 @@ class Sampler:
             return self.last_latent
         except InterruptedException:
             return self.last_latent
+        finally:
+            # scheduled LoRA weights must not stay in the UNet, whether sampling finished, was interrupted or failed
+            lora_schedule.finish()
 
     def number_of_needed_noises(self, p):
         return p.steps

@@ -1,5 +1,7 @@
 import os.path
 from functools import wraps
+
+import gradio as gr
 import html
 import time
 
@@ -18,6 +20,10 @@ def wrap_queued_call(func):
     return f
 
 
+class QueuedTaskCancelled(Exception):
+    """Raised instead of running a job that was cancelled while it waited in the queue."""
+
+
 def wrap_gradio_gpu_call(func, extra_outputs=None):
     @wraps(func)
     def f(*args, **kwargs):
@@ -30,6 +36,10 @@ def wrap_gradio_gpu_call(func, extra_outputs=None):
             id_task = None
 
         with queue_lock:
+            # the job has waited for its turn; it may have been taken out of the queue in the meantime
+            if id_task is not None and progress.take_cancelled(id_task):
+                raise QueuedTaskCancelled()
+
             shared.state.begin(job=id_task)
             progress.start_task(id_task)
 
@@ -72,6 +82,12 @@ def wrap_gradio_call_no_job(func, extra_outputs=None, add_stats=False):
 
         try:
             res = list(func(*args, **kwargs))
+        except QueuedTaskCancelled:
+            # nothing ran: leave gallery and infotext of the tab as they are
+            if extra_outputs_array is None:
+                extra_outputs_array = [None, '']
+
+            return tuple([gr.update() for _ in extra_outputs_array] + [gr.update()])
         except Exception as e:
             # When printing out our debug argument list,
             # do not print out more than a 100 KB of text
