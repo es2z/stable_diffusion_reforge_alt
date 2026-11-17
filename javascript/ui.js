@@ -84,6 +84,11 @@ function switch_to_inpaint_sketch() {
     return Array.from(arguments);
 }
 
+function switch_to_inpaint_editor() {
+    switch_to_img2img_tab(6);
+    return Array.from(arguments);
+}
+
 function switch_to_extras() {
     gradioApp().querySelector('#tabs').querySelectorAll('button')[2].click();
 

@@ -552,7 +552,7 @@ def create_ui():
                     with gr.Row(variant="compact", elem_id=f"img2img_copy_to_{tab_name}"):
                         gr.HTML("Copy image to: ", elem_id=f"img2img_label_copy_to_{tab_name}")
 
-                        for title, name in zip(['img2img', 'sketch', 'inpaint', 'inpaint sketch'], ['img2img', 'sketch', 'inpaint', 'inpaint_sketch']):
+                        for title, name in zip(['img2img', 'sketch', 'inpaint', 'inpaint sketch', 'inpaint+'], ['img2img', 'sketch', 'inpaint', 'inpaint_sketch', 'inpaint_editor']):
                             if name == tab_name:
                                 gr.Button(title, interactive=False)
                                 copy_image_destinations[name] = elem
@@ -617,7 +617,19 @@ def create_ui():
                                     img2img_batch_png_info_dir = gr.Textbox(label="PNG info directory", **shared.hide_dirs, placeholder="Leave empty to use input directory", elem_id="img2img_batch_png_info_dir")
                                     img2img_batch_png_info_props = gr.CheckboxGroup(["Prompt", "Negative prompt", "Seed", "CFG scale", "Sampler", "Steps", "Model hash"], label="Parameters to take from png info", info="Prompts from png info will be appended to prompts set in ui.")
 
-                            img2img_tabs = [tab_img2img, tab_sketch, tab_inpaint, tab_inpaint_color, tab_inpaint_upload, tab_batch]
+                            # Comes last so that the number of each mode stays what it was (the page shows it after
+                            # "Inpaint", see style.css). The mask is drawn in the browser, see javascript/inpaintEditor.js.
+                            with gr.TabItem('Inpaint+', id='inpaint_editor', elem_id="img2img_inpaint_editor_tab") as tab_inpaint_editor:
+                                inpaint_editor_image = gr.Image(label="Image for inpainting", show_label=False, elem_id="img2img_inpaint_editor_image", source="upload", interactive=True, type="pil", image_mode="RGB", height=opts.img2img_editor_height)
+                                gr.HTML(f'<div id="img2img_inpaint_editor" style="--inpaint-editor-height: {int(opts.img2img_editor_height)}px"></div>')
+                                # the mask as a PNG data URL, kept up to date by the editor
+                                inpaint_editor_mask = gr.Textbox(label="Inpaint+ mask", elem_id="img2img_inpaint_editor_mask", elem_classes=["hidden"], show_label=False)
+                                inpaint_editor_mask.do_not_save_to_config = True
+                                with FormRow(elem_id="img2img_inpaint_editor_result_row"):
+                                    inpaint_editor_take_result = gr.Button("Edit the selected result", elem_id="img2img_inpaint_editor_take_result", tooltip="Puts the image that is selected in the gallery of results into this editor. The mask stays if the size is the same.")
+                                add_copy_image_controls('inpaint_editor', inpaint_editor_image)
+
+                            img2img_tabs = [tab_img2img, tab_sketch, tab_inpaint, tab_inpaint_color, tab_inpaint_upload, tab_batch, tab_inpaint_editor]
 
                             for i, tab in enumerate(img2img_tabs):
                                 tab.select(fn=lambda tabnum=i: tabnum, inputs=[], outputs=[img2img_selected_tab])
@@ -741,11 +753,11 @@ def create_ui():
             # the code below is meant to update the resolution label after the image in the image selection UI has changed.
             # as it is now the event keeps firing continuously for inpaint edits, which ruins the page with constant requests.
             # I assume this must be a gradio bug and for now we'll just do it for non-inpaint inputs.
-            for component in [init_img, sketch]:
+            for component in [init_img, sketch, inpaint_editor_image]:
                 component.change(fn=lambda: None, _js="updateImg2imgResizeToTextAfterChangingImage", inputs=[], outputs=[], show_progress=False)
 
             def select_img2img_tab(tab):
-                return gr.update(visible=tab in [2, 3, 4]), gr.update(visible=tab == 3),
+                return gr.update(visible=tab in [2, 3, 4, 6]), gr.update(visible=tab == 3),
 
             for i, elem in enumerate(img2img_tabs):
                 elem.select(
@@ -755,6 +767,14 @@ def create_ui():
                 )
 
             output_panel = create_output_panel("img2img", opts.outdir_img2img_samples, toprow)
+
+            inpaint_editor_take_result.click(
+                fn=parameters_copypaste.image_from_url_text,
+                _js="extract_image_from_gallery",
+                inputs=[output_panel.gallery],
+                outputs=[inpaint_editor_image],
+                show_progress=False,
+            )
 
             img2img_args = dict(
                 fn=wrap_gradio_gpu_call(modules.img2img.img2img, extra_outputs=[None, '', '']),
@@ -795,6 +815,8 @@ def create_ui():
                     img2img_batch_use_png_info,
                     img2img_batch_png_info_props,
                     img2img_batch_png_info_dir,
+                    inpaint_editor_image,
+                    inpaint_editor_mask,
                 ] + custom_inputs,
                 outputs=[
                     output_panel.gallery,

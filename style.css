@@ -2144,3 +2144,185 @@ body.resizing .resize-handle {
     color: var(--button-secondary-text-color);
     border-color: var(--button-secondary-text-color);
 }
+
+/* ---- Inpaint+ (javascript/inpaintEditor.js) ---- */
+
+/* the tab is the last one, so that the mode numbers stay the same, but is shown after "Inpaint" */
+#mode_img2img > .tab-nav > button:nth-child(n+4) {
+    order: 1;
+}
+
+#mode_img2img > .tab-nav > button:nth-child(7) {
+    order: 0;
+}
+
+.inpaint-editor-source--hidden {
+    display: none !important;
+}
+
+.inpaint-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    outline: none;
+}
+
+.inpaint-editor:not(.inpaint-editor--has-image) {
+    display: none;
+}
+
+.inpaint-editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.8rem;
+}
+
+.inpaint-editor-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.inpaint-editor-group--end {
+    margin-left: auto;
+}
+
+.inpaint-editor-button {
+    padding: 0.1rem 0.5rem;
+    font-size: 0.8rem;
+    line-height: 1.4rem;
+    white-space: nowrap;
+    cursor: pointer;
+    color: var(--button-secondary-text-color);
+    background: var(--button-secondary-background-fill);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.25rem;
+}
+
+.inpaint-editor-button:hover:not(:disabled) {
+    border-color: var(--button-secondary-text-color);
+}
+
+.inpaint-editor-button.inpaint-editor-button--active {
+    color: var(--button-primary-text-color);
+    background: var(--button-primary-background-fill);
+    border-color: transparent;
+}
+
+.inpaint-editor-button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.inpaint-editor-number,
+.inpaint-editor-check,
+.inpaint-editor-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0 0.2rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+/* the page styles inputs for its own components; these are plain ones */
+.inpaint-editor .inpaint-editor-number input {
+    width: 4.5em !important;
+    height: auto !important;
+    padding: 0.1rem 0.25rem !important;
+    font-size: 0.8rem !important;
+    line-height: 1.3rem !important;
+    color: var(--body-text-color);
+    background: var(--input-background-fill);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.25rem;
+    box-shadow: none !important;
+}
+
+.inpaint-editor .inpaint-editor-check input {
+    appearance: auto !important;
+    width: 1rem !important;
+    height: 1rem !important;
+    margin: 0 !important;
+    accent-color: var(--button-primary-background-fill);
+}
+
+.inpaint-editor .inpaint-editor-range input {
+    width: 6em;
+}
+
+.inpaint-editor-viewport {
+    position: relative;
+    height: var(--inpaint-editor-height, 720px);
+    overflow: hidden;
+    touch-action: none;
+    cursor: crosshair;
+    background: repeating-conic-gradient(#7a7a7a 0% 25%, #9a9a9a 0% 50%) 50% / 24px 24px;
+    border-radius: 0.25rem;
+}
+
+.inpaint-editor-viewport[data-tool="brush"],
+.inpaint-editor-viewport[data-tool="eraser"] {
+    cursor: none;
+}
+
+.inpaint-editor-stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+}
+
+.inpaint-editor-stage canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.inpaint-editor-stage--pixelated canvas {
+    image-rendering: pixelated;
+}
+
+.inpaint-editor-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.inpaint-editor-status {
+    position: absolute;
+    left: 0.4rem;
+    bottom: 0.3rem;
+    padding: 0 0.3rem;
+    font-size: 0.75rem;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 0.2rem;
+    pointer-events: none;
+}
+
+.inpaint-editor-status:empty {
+    display: none;
+}
+
+.inpaint-editor.inpaint-editor--modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    padding: 0.5rem;
+    background: var(--background-fill-primary, #0b0f19);
+}
+
+.inpaint-editor--modal .inpaint-editor-viewport {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+}
+
+body.inpaint-editor-modal-open {
+    overflow: hidden;
+}

@@ -51,6 +51,7 @@ jobs:
           python -m pytest -vv
           --junitxml=test/results-unit.xml
           test/test_image_saving.py
+          test/test_inpaint_editor.py
           test/test_torch_utils.py
           test/test_face_restorers.py
         env:
@@ -104,7 +105,7 @@ jobs:
         run: |
           # importing torch alone takes a while on the runners
           wait-for-it --service 127.0.0.1:7860 -t 600
-          python -m pytest -vv --junitxml=test/results.xml --cov . --cov-report=xml --verify-base-url test --ignore=test/test_image_saving.py --ignore=test/test_torch_utils.py --ignore=test/test_face_restorers.py
+          python -m pytest -vv --junitxml=test/results.xml --cov . --cov-report=xml --verify-base-url test --ignore=test/test_image_saving.py --ignore=test/test_inpaint_editor.py --ignore=test/test_torch_utils.py --ignore=test/test_face_restorers.py
       # TODO(huchenlei): Enable ControlNet tests. Currently it is too slow to run these tests on CPU with
       # real SD model. We need to find a way to load empty SD model.
       # - name: Run ControlNet tests
