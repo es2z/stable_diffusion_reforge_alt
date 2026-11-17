@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import os.path
 import re
 import threading
@@ -14,7 +15,7 @@ from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
 import html
-from fastapi import Body
+from fastapi import Body, Request
 from fastapi.exceptions import HTTPException
 from PIL import Image
 
@@ -285,15 +286,26 @@ def check_tabname(tabname: str):
         raise HTTPException(status_code=400, detail="Invalid tabname")
 
 
-def get_items(page: str = ""):
-    """Data for all cards of a page. The browser builds the cards itself, and only those that are on screen."""
-    from starlette.responses import JSONResponse
+def get_items(request: Request, page: str = ""):
+    """Data for all cards of a page. The browser builds the cards itself, and only those that are on screen.
+
+    The response carries an ETag; a browser that sends it back with `If-None-Match` and already has
+    exactly this data gets a 304 without a body, and has nothing to download, parse or redraw.
+    """
+    from starlette.responses import Response
 
     page = get_page(page)
     if page is None:
         raise HTTPException(status_code=404, detail="Page not found")
 
-    return JSONResponse(page.create_items_data())
+    body = json.dumps(page.create_items_data(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf8", errors="replace")
+    etag = '"' + hashlib.blake2b(body, digest_size=16).hexdigest() + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 def get_stats(page: str = ""):
@@ -389,6 +401,8 @@ class ExtraNetworksPage:
         self.metadata = {}
         self.items = {}
         self.items_lock = threading.RLock()
+        self.items_cache = None
+        """(fingerprint, card data of all items) of the last listing, see cached_items_data()"""
         self.lister = util.MassFileLister()
         # fields of the user metadata (the .json next to the file) that the search of the page looks into
         self.searchable_user_metadata = ["activation text", "negative text", "notes"]
@@ -404,6 +418,66 @@ class ExtraNetworksPage:
 
     def refresh(self):
         pass
+
+    def items_state(self):
+        """Tells whether the items of the page may be kept between requests for them.
+
+        Listing a page with thousands of items looks for the preview, description and user metadata
+        of every single one. Pages that return something here are spared that for as long as it
+        stays the same and no file in `allowed_directories_for_previews()` was added, removed or
+        modified: return a hashable value covering everything else `list_items()` depends on
+        (the list of models, options, the loaded checkpoint, ...). None, the default, means the
+        page is listed anew every time, which is always correct.
+        """
+        return None
+
+    def invalidate_items_cache(self):
+        """Makes the next request for the items list everything anew."""
+        with self.items_lock:
+            self.items_cache = None
+
+    def directories_signature(self):
+        """A value that changes whenever a file in the directories of the page is added, removed or modified.
+
+        Costs one directory listing per directory and nothing per file where the listing already
+        holds size and time (Windows); elsewhere one stat call per file.
+        """
+        digest = hashlib.blake2b(digest_size=16)
+        seen = set()
+        stack = []
+
+        for root in self.allowed_directories_for_previews():
+            if root:
+                stack.append(os.path.abspath(root))
+
+        while stack:
+            directory = stack.pop()
+
+            # links may lead back to where the walk has been
+            real = os.path.realpath(directory)
+            if real in seen:
+                continue
+            seen.add(real)
+
+            try:
+                with os.scandir(directory) as entries:
+                    entries = sorted(entries, key=lambda x: x.name)
+            except OSError:
+                continue
+
+            digest.update(f"{directory}\0".encode("utf8", errors="surrogatepass"))
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        stack.append(entry.path)
+                        continue
+
+                    stat = entry.stat()
+                    digest.update(f"{entry.name}|{stat.st_mtime_ns}|{stat.st_size}\0".encode("utf8", errors="surrogatepass"))
+                except OSError:
+                    digest.update(f"{entry.name}|?\0".encode("utf8", errors="surrogatepass"))
+
+        return digest.hexdigest()
 
     def read_user_metadata(self, item, use_cache=True):
         filename = item.get("filename", None)
@@ -870,11 +944,59 @@ class ExtraNetworksPage:
 
         return data
 
+    def cached_items_data(self) -> list:
+        """Card data of all items: from the last listing if nothing changed since, otherwise listed anew."""
+        with self.items_lock:
+            fingerprint = None
+
+            try:
+                state = self.items_state()
+                if state is not None:
+                    fingerprint = (
+                        state,
+                        self.directories_signature(),
+                        # what create_item_data() and the preview links depend on
+                        shared.opts.extra_networks_card_show_desc,
+                        shared.opts.extra_networks_hidden_models,
+                        ui_extra_networks_thumbnails.settings_signature(),
+                        tuple(self.allowed_directories_for_previews()),
+                        tuple(self.searchable_user_metadata),
+                    )
+            except Exception as e:
+                errors.display(e, f"checking whether the items of {self.title} changed")
+                fingerprint = None
+
+            if fingerprint is not None and self.items_cache is not None and self.items_cache[0] == fingerprint:
+                items = self.items_cache[1]
+
+                # usage counts and favourites change without any file changing
+                page_stats = ui_extra_networks_stats.get_page(self.name)
+                no_stats = {"count": 0, "last_used": 0, "favorite": False}
+                for index, data in enumerate(items):
+                    stats = page_stats.get(data["name"], no_stats)
+                    if data["usage_count"] != stats["count"] or data["last_used"] != stats["last_used"] or data["favorite"] != stats["favorite"]:
+                        items[index] = {
+                            **data,
+                            "sort_keys": {**data["sort_keys"], "usage_count": stats["count"], "last_used": stats["last_used"]},
+                            "usage_count": stats["count"],
+                            "last_used": stats["last_used"],
+                            "favorite": stats["favorite"],
+                        }
+
+                return list(items)
+
+            self.items_cache = None
+            self.refresh_items()
+            items = [x for x in (self.create_item_data(item) for item in self.items.values()) if x is not None]
+
+            if fingerprint is not None:
+                self.items_cache = (fingerprint, items)
+
+            return list(items)
+
     def create_items_data(self) -> dict:
         """Lists the items anew and returns everything the browser needs to show this page, in any tab."""
-        with self.items_lock:
-            self.refresh_items()
-            items = [self.create_item_data(item) for item in self.items.values()]
+        items = self.cached_items_data()
 
         style_height = f"height: {shared.opts.extra_networks_card_height}px;" if shared.opts.extra_networks_card_height else ''
         style_width = f"width: {shared.opts.extra_networks_card_width}px;" if shared.opts.extra_networks_card_width else ''
@@ -885,7 +1007,7 @@ class ExtraNetworksPage:
         return {
             "page": self.name,
             "extra_networks_tabname": self.extra_networks_tabname,
-            "items": [x for x in items if x is not None],
+            "items": items,
             "allow_negative_prompt": bool(self.allow_negative_prompt),
             "card_style": style_height + style_width + style_font_size,
             "description_is_html": bool(shared.opts.extra_networks_card_description_is_html),
@@ -1100,6 +1222,8 @@ def create_ui(interface: gr.Blocks, unrelated_tabs, tabname):
         def refresh():
             for pg in ui.stored_extra_pages:
                 pg.refresh()
+                # the refresh button always lists everything anew
+                pg.invalidate_items_cache()
 
         # The pages themselves are not outputs: the browser asks for the items again once the lists are refreshed.
         button_refresh = gr.Button("Refresh", elem_id=f"{tabname}_{page.extra_networks_tabname}_extra_refresh_internal", visible=False)

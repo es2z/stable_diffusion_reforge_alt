@@ -211,7 +211,24 @@ def update_available_networks_by_names(names: list[str]):
     process_network_files(names)
 
 
+available_networks_version = 0
+"""goes up when the files are listed again: available_networks holds other objects from then on"""
+
+
 def list_available_networks():
+    global available_networks_version
+
+    # Counted before and after: whoever looks at available_networks while it is being filled gets a
+    # version that nothing is known by once the list is complete.
+    available_networks_version += 1
+
+    try:
+        list_available_networks_inner()
+    finally:
+        available_networks_version += 1
+
+
+def list_available_networks_inner():
     available_networks.clear()
     available_network_aliases.clear()
     forbidden_network_aliases.clear()

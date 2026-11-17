@@ -15,6 +15,21 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def refresh(self):
         networks.list_available_networks()
 
+    def items_state(self):
+        # Everything create_item() looks at apart from the files next to the networks.
+        model = shared.sd_model
+
+        return (
+            networks.available_networks_version,
+            # the hash is known only after a network without one in its metadata has been used once
+            tuple((x.name, x.shorthash) for x in list(networks.available_networks.values())),
+            shared.opts.lora_show_all,
+            tuple(shared.opts.lora_hide_unknown_for_versions),
+            shared.opts.lora_preferred_name,
+            shared.opts.samples_format,
+            (model.is_sdxl, model.is_sd2, model.is_sd1) if model else None,
+        )
+
     def create_item(self, name, index=None, enable_filter=True):
         lora_on_disk = networks.available_networks.get(name)
         if lora_on_disk is None:

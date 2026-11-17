@@ -31,6 +31,7 @@ var ExtraNetworksData = (function () {
         if (!pages[pageName]) {
             pages[pageName] = {
                 data: null,
+                etag: null, // of the response `data` came from
                 promise: null,
                 request: 0,
                 listeners: [],
@@ -41,7 +42,8 @@ var ExtraNetworksData = (function () {
 
     /**
      * change: what is different from the last "ready" state - "all" (the list was loaded),
-     * "item" (one item was replaced) or "stats" (usage counts and favourites only).
+     * "item" (one item was replaced), "stats" (usage counts and favourites only) or "none"
+     * (the server was asked and has the same list as before).
      */
     function notify(page, status, change) {
         page.listeners.forEach(function (listener) {
@@ -130,21 +132,39 @@ var ExtraNetworksData = (function () {
         var request = ++page.request;
         notify(page, "loading");
 
+        // The server answers "304 Not Modified" without a body if the list is still the one this
+        // etag came with; then there is nothing to parse, and the cards stay as they are.
+        var options = { cache: "no-store" };
+        if (page.data && page.etag) {
+            options.headers = { "If-None-Match": page.etag };
+        }
+
         page.promise = fetch(
             "./sd_extra_networks/items?page=" + encodeURIComponent(pageName),
-            { cache: "no-store" }
+            options
         )
             .then(function (response) {
+                if (response.status === 304 && page.data) {
+                    return null;
+                }
                 if (!response.ok) {
                     throw new Error("HTTP " + response.status);
                 }
-                return response.json();
+                var etag = response.headers.get("ETag");
+                return response.json().then(function (data) {
+                    return { data: data, etag: etag };
+                });
             })
-            .then(function (data) {
+            .then(function (result) {
                 if (request !== page.request) {
                     return page.promise; // a newer request is on its way
                 }
-                page.data = prepare(data);
+                if (result === null) {
+                    notify(page, "ready", "none");
+                    return page.data;
+                }
+                page.data = prepare(result.data);
+                page.etag = result.etag;
                 notify(page, "ready");
                 return page.data;
             })
@@ -503,6 +523,7 @@ var ExtraNetworksGrid = (function () {
             );
 
             if (state.status === "ready") {
+                if (state.change === "none" && this.data === state.data) return;
                 this.data = state.data;
                 this.update();
             } else if (!this.data) {
@@ -1635,7 +1656,11 @@ function setupExtraNetworksForTab(tabname) {
             ExtraNetworksData.subscribe(pageName, function (state) {
                 grid.setState(state);
                 // usage counts and favourites are only shown on the cards
-                if (state.status === "ready" && state.change !== "stats") {
+                if (
+                    state.status === "ready" &&
+                    state.change !== "stats" &&
+                    state.change !== "none"
+                ) {
                     extraNetworksRenderDirs(tabname, pageName, state.data);
                     extraNetworksRenderVersions(tabname, pageName, state.data);
                     ExtraNetworksTree.render(tabname, pageName, state.data);
