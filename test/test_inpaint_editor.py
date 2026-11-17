@@ -45,7 +45,7 @@ def test_mask_of_another_size_is_scaled_to_the_image():
 def test_no_mask_asks_for_one(data):
     from modules.img2img import decode_inpaint_editor_mask
 
-    with pytest.raises(ValueError, match="draw a mask first"):
+    with pytest.raises(ValueError, match="draw a mask first.*Inpaint\\+ tab"):
         decode_inpaint_editor_mask(data, (8, 8))
 
 

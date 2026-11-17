@@ -621,7 +621,7 @@ def create_ui():
                             # "Inpaint", see style.css). The mask is drawn in the browser, see javascript/inpaintEditor.js.
                             with gr.TabItem('Inpaint+', id='inpaint_editor', elem_id="img2img_inpaint_editor_tab") as tab_inpaint_editor:
                                 inpaint_editor_image = gr.Image(label="Image for inpainting", show_label=False, elem_id="img2img_inpaint_editor_image", source="upload", interactive=True, type="pil", image_mode="RGB", height=opts.img2img_editor_height)
-                                gr.HTML(f'<div id="img2img_inpaint_editor" style="--inpaint-editor-height: {int(opts.img2img_editor_height)}px"></div>')
+                                inpaint_editor_html = gr.HTML(f'<div id="img2img_inpaint_editor" style="--inpaint-editor-height: {int(opts.img2img_editor_height)}px"></div>')
                                 # the mask as a PNG data URL, kept up to date by the editor
                                 inpaint_editor_mask = gr.Textbox(label="Inpaint+ mask", elem_id="img2img_inpaint_editor_mask", elem_classes=["hidden"], show_label=False)
                                 inpaint_editor_mask.do_not_save_to_config = True
@@ -910,6 +910,13 @@ def create_ui():
 
         extra_networks_ui_img2img = ui_extra_networks.create_ui(img2img_interface, [img2img_generation_tab], 'img2img')
         # outside the row of the Generation tab, see txt2img
+        # Where the mask of Inpaint+ is among the arguments of a generation: the page puts the newest mask of
+        # the editor right there when a generation starts (submitGeneration in javascript/ui.js).
+        inpaint_editor_html.value = (
+            f'<div id="img2img_inpaint_editor" data-mask-arg="{img2img_args["inputs"].index(inpaint_editor_mask)}"'
+            f' style="--inpaint-editor-height: {int(opts.img2img_editor_height)}px"></div>'
+        )
+
         create_generation_queue_slots("img2img", img2img_args)
         ui_extra_networks.create_paste_from_preview("img2img")
 

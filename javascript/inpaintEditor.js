@@ -845,11 +845,31 @@
         }, 0);
     }
 
+    /** The mask as it is now, as a PNG data URL; "" if nothing is masked. */
+    function currentMaskValue() {
+        var result = maskCanvasForExport();
+        return result.empty ? "" : result.canvas.toDataURL("image/png");
+    }
+
     /** Puts the mask into the textbox right away if it is not there yet (before a generation starts). */
     function flushMask() {
         if (!ed.mask || ed.sentVersion === ed.version) return;
-        var result = maskCanvasForExport();
-        setMaskInput(result.empty ? "" : result.canvas.toDataURL("image/png"));
+        setMaskInput(currentMaskValue());
+        ed.sentVersion = ed.version;
+    }
+
+    /**
+     * Called when a generation starts (submitGeneration in ui.js): writes the mask into the arguments
+     * that are sent, at the place the server named (data-mask-arg). The textbox can not be relied on
+     * alone - what the page sends is what gradio had for it, which may be older than the editor.
+     */
+    function putMaskIntoArguments(args) {
+        var index = parseInt(ed.root && ed.root.dataset.maskArg, 10);
+        if (isNaN(index) || index <= 1 || index >= args.length) return;
+
+        var value = ed.mask && ed.root.classList.contains("inpaint-editor--has-image") ? currentMaskValue() : "";
+        args[index] = value;
+        setMaskInput(value);
         ed.sentVersion = ed.version;
     }
 
@@ -1390,6 +1410,7 @@
         undo: undo,
         redo: redo,
         flushMask: flushMask,
+        putMaskIntoArguments: putMaskIntoArguments,
         fitView: fitView,
         toggleModal: toggleModal,
         selectAll: selectAll,

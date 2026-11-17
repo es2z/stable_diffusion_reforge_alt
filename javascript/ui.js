@@ -204,6 +204,11 @@ function submitGeneration(tabname, args, slot) {
     res[0] = id;
     if (tabname == 'img2img') {
         res[1] = get_tab_index('mode_img2img');
+
+        // Inpaint+: the mask as it is in the editor now, not what was last copied into its textbox
+        if (res[1] == 6 && window.InpaintEditor) {
+            window.InpaintEditor.putMaskIntoArguments(res);
+        }
     }
 
     return res;

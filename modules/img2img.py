@@ -151,13 +151,16 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
     return batch_results
 
 
+NO_INPAINT_EDITOR_MASK = "Inpaint+: draw a mask first - paint it in the Inpaint+ tab (a mask drawn in the Inpaint tab is not used there)"
+
+
 def decode_inpaint_editor_mask(data: str, size):
     """The mask of the Inpaint+ editor: a PNG data URL, white where the image is to be redrawn.
 
     Returns an "L" image of `size`. Raises ValueError with a message for the user if there is no mask.
     """
     if not data:
-        raise ValueError("Inpaint+: draw a mask first")
+        raise ValueError(NO_INPAINT_EDITOR_MASK)
 
     _, _, encoded = data.partition("base64,")
     try:
@@ -172,7 +175,7 @@ def decode_inpaint_editor_mask(data: str, size):
         mask = mask.resize(tuple(size), Image.NEAREST)
 
     if mask.getextrema()[1] == 0:
-        raise ValueError("Inpaint+: draw a mask first")
+        raise ValueError(NO_INPAINT_EDITOR_MASK)
 
     return mask
 
@@ -280,6 +283,13 @@ def img2img_function(id_task: str, request: gr.Request, mode: int, prompt: str, 
     return processed.images + processed.extra_images, generation_info_js, plaintext_to_html(processed.info), plaintext_to_html(processed.comments, classname="comments")
 
 def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, inpaint_editor_image, inpaint_editor_mask: str, *args):
+    if mode == 6:
+        # Checked here, where an error reaches the page as it is. Raised on the main thread it would only be
+        # printed to the console, and the page would get an error about the missing result instead.
+        if inpaint_editor_image is None:
+            raise ValueError("Inpaint+: no image to inpaint")
+        decode_inpaint_editor_mask(inpaint_editor_mask, inpaint_editor_image.size)
+
     return main_thread.run_and_wait_result(
         img2img_function,
         id_task,
