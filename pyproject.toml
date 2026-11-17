@@ -2,6 +2,16 @@
 
 target-version = "py39"
 
+extend-exclude = [
+	"extensions",
+	"extensions-disabled",
+	"modules_forge",
+	"modules",
+	"ldm_patched",
+	"extensions-builtin",
+	"k_diff",  # copy of k-diffusion
+]
+
 [tool.ruff.lint]
 
 extend-select = [
@@ -11,14 +21,6 @@ extend-select = [
   "W",
 ]
 
-exclude = [
-	"extensions",
-	"extensions-disabled",
-	"modules_forge",
-	"modules",
-	"ldm_patched",
-	"extensions-builtin",
-]
 
 ignore = [
 	"E501", # Line too long
