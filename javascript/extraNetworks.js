@@ -2930,6 +2930,60 @@ window.addEventListener("keydown", function(event) {
     event.preventDefault();
 });
 
+/**
+ * The tab button of the Generation tab (pageName null) or of a page of cards ("lora", ...) of
+ * txt2img or img2img. The same in tabs and side panel mode; null if there is none.
+ */
+function extraNetworksTabButton(tabname, pageName) {
+    var tabs = gradioApp().getElementById(tabname + "_extra_tabs");
+    if (!tabs) return null;
+
+    var buttons = tabs.querySelectorAll(":scope > .tab-nav > button");
+    if (!pageName) return buttons[0] || null;
+
+    // tab buttons are in the order of the tabs
+    var items = tabs.querySelectorAll(":scope > .tabitem");
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].id == tabname + "_" + pageName) return buttons[i] || null;
+    }
+    return null;
+}
+
+// L: Lora <-> Generation. From any other tab (Generation, Checkpoints, Textual Inversion, ...) to Lora,
+// from Lora back to Generation.
+// G: to Generation, from wherever.
+window.addEventListener("keydown", function(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat) return;
+    if (event.key != "l" && event.key != "L" && event.key != "g" && event.key != "G") return;
+    if (extraNetworksIsTyping(event)) return;
+
+    // a popup (metadata editor) or the full page image viewer is in front of the page
+    if (globalPopup && globalPopup.style.display != "none") return;
+    var lightbox = gradioApp().getElementById("lightboxModal");
+    if (lightbox && lightbox.style.display && lightbox.style.display != "none") {
+        return;
+    }
+
+    var tabname = extraNetworksVisibleGenerationTab();
+    if (!tabname) return;
+
+    var target;
+    if (event.key == "g" || event.key == "G") {
+        target = extraNetworksTabButton(tabname, null);
+    } else {
+        var page = extraNetworksVisiblePage();
+        target = extraNetworksTabButton(
+            tabname,
+            page && page.pageName == "lora" ? null : "lora"
+        );
+    }
+    if (!target) return;
+
+    // a click on the tab that is open already changes nothing
+    target.click();
+    event.preventDefault();
+});
+
 // ============================================================================
 // UI Initialization
 // ============================================================================
