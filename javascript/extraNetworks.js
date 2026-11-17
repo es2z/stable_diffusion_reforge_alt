@@ -56,9 +56,11 @@ var ExtraNetworksData = (function () {
         }
 
         item.index = index;
-        // the same text the search used to collect from the card's elements
+        // The text the search used to collect from the card's elements, plus what the user wrote
+        // about the item in "Edit metadata" (activation text, notes).
         item.searchText = (item.search_terms || [])
             .concat([description])
+            .concat(item.search_extra || [])
             .join(" ")
             .toLowerCase();
 
@@ -319,6 +321,21 @@ var ExtraNetworksGrid = (function () {
         };
     }
 
+    /**
+     * Splits what was typed into the search field into the words that all have to be found.
+     * "Quotes" keep words together: `ink "series a"` -> ["ink", "series a"].
+     */
+    function searchWords(text) {
+        var words = [];
+        var re = /"([^"]*)"?|(\S+)/g;
+        var match;
+        while ((match = re.exec(text)) !== null) {
+            var word = match[1] !== undefined ? match[1] : match[2];
+            if (word) words.push(word);
+        }
+        return words;
+    }
+
     function formatTime(timestamp) {
         var d = new Date(timestamp * 1000);
         var pad = function (n) {
@@ -347,9 +364,11 @@ var ExtraNetworksGrid = (function () {
         this.view = {
             term: "",
             useRegex: false,
+            literal: false,
             sortKey: "default",
             descending: false,
             favoritesOnly: false,
+            versions: [],
         };
         this.viewKey = null;
         this.scrollPositions = new Map(); // view key -> where that view was scrolled to when it was left
@@ -496,14 +515,29 @@ var ExtraNetworksGrid = (function () {
                     };
                 }
             } else {
-                term = term.toLowerCase();
+                // A directory picked in the tree or with the directory buttons is looked for as it
+                // is; text that was typed is taken word by word, and every word has to be there.
+                var words = view.literal
+                    ? [term.toLowerCase()]
+                    : searchWords(term.toLowerCase());
                 matches = function (text) {
-                    return text.indexOf(term) !== -1;
+                    for (var i = 0; i < words.length; i++) {
+                        if (text.indexOf(words[i]) === -1) return false;
+                    }
+                    return true;
                 };
             }
 
+            var versions = view.versions || [];
+
             var items = this.data.items.filter(function (item) {
                 if (view.favoritesOnly && !item.favorite) return false;
+                if (
+                    versions.length &&
+                    versions.indexOf(item.sd_version || "") === -1
+                ) {
+                    return false;
+                }
                 // items in hidden directories only show up when searched for
                 if (item.search_only && term.length < 4) return false;
                 return matches(item.searchText);
@@ -1253,6 +1287,72 @@ function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
     });
 }
 
+// Base models in the order their filter buttons are shown; names that are not listed follow in alphabetical order.
+var extraNetworksVersionOrder = [
+    "SD1",
+    "SD2",
+    "SDXL",
+    "Illustrious",
+    "Noob",
+    "PonyXL",
+    "Unknown",
+];
+
+/**
+ * Fills the base model filter of a page: one button per base model its items are for. Several can
+ * be on at once; with none on, everything is shown. Pages whose items are all for the same base
+ * model (or do not say) get no buttons.
+ */
+function extraNetworksRenderVersions(tabname, extra_networks_tabname, data) {
+    var tabname_full = tabname + "_" + extra_networks_tabname;
+    var container = gradioApp().getElementById(tabname_full + "_extra_versions");
+    if (!container) return;
+
+    var found = {};
+    (data.items || []).forEach(function (item) {
+        if (item.sd_version) found[item.sd_version] = true;
+    });
+    var versions = Object.keys(found).sort(function (a, b) {
+        var ia = extraNetworksVersionOrder.indexOf(a);
+        var ib = extraNetworksVersionOrder.indexOf(b);
+        if (ia !== ib) {
+            return (ia === -1 ? 1000 : ia) - (ib === -1 ? 1000 : ib);
+        }
+        return a < b ? -1 : a > b ? 1 : 0;
+    });
+    if (versions.length < 2) versions = [];
+
+    var signature = JSON.stringify(versions);
+    if (container.dataset.versions === signature) return;
+    container.dataset.versions = signature;
+
+    var enabled = {};
+    container
+        .querySelectorAll(".extra-network-control--enabled")
+        .forEach(function (chip) {
+            enabled[chip.dataset.version] = true;
+        });
+    var hadEnabled = Object.keys(enabled).length > 0;
+
+    container.textContent = "";
+    versions.forEach(function (version) {
+        var chip = document.createElement("div");
+        chip.className =
+            "extra-network-control--version" +
+            (enabled[version] ? " extra-network-control--enabled" : "");
+        chip.dataset.version = version;
+        chip.textContent = version;
+        chip.addEventListener("click", function () {
+            chip.classList.toggle("extra-network-control--enabled");
+            applyExtraNetworkFilter(tabname_full);
+        });
+        container.appendChild(chip);
+    });
+
+    // a base model that was filtered for is gone from the list: the filter goes with its button
+    if (hadEnabled) applyExtraNetworkFilter(tabname_full);
+}
+
 /**
  * Asks the server for the items of all pages again and redraws the cards in every tab.
  */
@@ -1321,9 +1421,25 @@ function setupExtraNetworksForTab(tabname) {
                     "#" + tabname_full + "_extra_favorites"
                 );
 
+                var versions = [];
+                gradioApp()
+                    .querySelectorAll(
+                        "#" +
+                            tabname_full +
+                            "_extra_versions .extra-network-control--version.extra-network-control--enabled"
+                    )
+                    .forEach(function (chip) {
+                        versions.push(chip.dataset.version);
+                    });
+
                 grid.setView({
                     term: search.value,
                     useRegex: !!(regexCheckbox && regexCheckbox.checked),
+                    // set by a click on a directory; typing anything makes it ordinary search text again
+                    literal:
+                        search.value !== "" &&
+                        search.dataset.literal === search.value,
+                    versions: versions,
                     sortKey: activeSortElem
                         ? activeSortElem.dataset.sortkey
                         : "default",
@@ -1365,6 +1481,7 @@ function setupExtraNetworksForTab(tabname) {
                 grid.setState(state);
                 if (state.status === "ready") {
                     extraNetworksRenderDirs(tabname, pageName, state.data);
+                    extraNetworksRenderVersions(tabname, pageName, state.data);
                     ExtraNetworksTree.render(tabname, pageName, state.data);
                 }
             });
@@ -1800,6 +1917,8 @@ function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
         ? ""
         : button.textContent.trim();
 
+    // the name of a directory is looked for as a whole, spaces included
+    searchTextarea.dataset.literal = text;
     searchTextarea.value = text;
     updateInput(searchTextarea);
 }
@@ -1843,6 +1962,8 @@ function extraNetworksTreeProcessDirectoryClick(
         var search_input_elem = gradioApp().querySelector(
             "#" + tabname + "_" + extra_networks_tabname + "_extra_search"
         );
+        // the path of a directory is looked for as a whole, spaces included
+        search_input_elem.dataset.literal = _search_text;
         search_input_elem.value = _search_text;
         updateInput(search_input_elem);
     }

@@ -390,6 +390,8 @@ class ExtraNetworksPage:
         self.items = {}
         self.items_lock = threading.RLock()
         self.lister = util.MassFileLister()
+        # fields of the user metadata (the .json next to the file) that the search of the page looks into
+        self.searchable_user_metadata = ["activation text", "negative text", "notes"]
         # HTML Templates
         self.pane_tpl = shared.html("extra-networks-pane.html")
         self.pane_content_tree_tpl = shared.html("extra-networks-pane-tree.html")
@@ -829,6 +831,16 @@ class ExtraNetworksPage:
 
         stats = ui_extra_networks_stats.get(self.name, item["name"])
 
+        # What the user wrote about the item in "Edit metadata". Searched like the description, not shown on the card.
+        user_metadata = item.get("user_metadata") or {}
+        search_extra = [str(user_metadata[key]) for key in self.searchable_user_metadata if isinstance(user_metadata.get(key), str) and user_metadata[key].strip()]
+
+        # Base model the item is for, as the filter buttons of the page show it. What the user picked in
+        # "Edit metadata" wins: that list has names the detection does not know (Illustrious, PonyXL, ...).
+        sd_version = user_metadata.get("sd version")
+        if not isinstance(sd_version, str) or not sd_version.strip():
+            sd_version = str(item.get("sd_version", "") or "")
+
         data = {
             "name": item["name"],
             "filename": item.get("filename", "") or "",
@@ -836,6 +848,8 @@ class ExtraNetworksPage:
             "preview": item.get("preview", None) or None,
             "description": (item.get("description", "") or "") if shared.opts.extra_networks_card_show_desc else "",
             "search_terms": [str(x) for x in item.get("search_terms", [])],
+            "search_extra": search_extra,
+            "sd_version": sd_version,
             "search_only": search_only,
             "sort_keys": {**item.get("sort_keys", {}), "usage_count": stats["count"], "last_used": stats["last_used"]},
             "has_metadata": bool(item.get("metadata")),

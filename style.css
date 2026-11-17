@@ -2115,3 +2115,32 @@ body.resizing .resize-handle {
     visibility: visible;
     width: auto;
 }
+
+/* Base model filter of the Extra Networks pages: one small button per base model (SD1, SDXL, ...) */
+.extra-network-control .extra-network-control--versions {
+    display: inline-flex;
+    flex: none;
+    align-self: center;
+    gap: 0.2rem;
+    margin: 0 0.25rem;
+}
+
+.extra-network-control .extra-network-control--versions:empty {
+    display: none;
+}
+
+.extra-network-control .extra-network-control--version {
+    padding: 0.1rem 0.45rem;
+    font-size: 0.8rem;
+    line-height: 1.4rem;
+    white-space: nowrap;
+    cursor: pointer;
+    color: var(--input-placeholder-color);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 0.25rem;
+}
+
+.extra-network-control .extra-network-control--version.extra-network-control--enabled {
+    color: var(--button-secondary-text-color);
+    border-color: var(--button-secondary-text-color);
+}
