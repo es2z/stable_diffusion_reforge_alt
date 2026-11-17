@@ -32,6 +32,10 @@ var OutputBrowser = (function () {
     var layout = { columns: 0, tile: 0, stale: true };
     var frame = null;
 
+    // Where the grid is scrolled to. Kept here because a hidden tab has no scroll position to read:
+    // while the History tab is not shown the grid reports 0, and some browsers forget it for good.
+    var scroll = { top: 0, pending: null };
+
     function el(tag, className, text) {
         var element = document.createElement(tag);
         if (className) element.className = className;
@@ -124,14 +128,40 @@ var OutputBrowser = (function () {
     }
 
     /**
+     * What is at the top of the grid, so the same images can be shown there after the directory
+     * was listed again. null at the very top: there the newest images are what should be seen.
+     */
+    function captureAnchor() {
+        if (!(scroll.top > 0) || !(layout.tile > 0) || !layout.columns) return null;
+
+        var row = Math.floor(scroll.top / layout.tile);
+        var file = state.files[row * layout.columns];
+        if (!file) return null;
+
+        return { name: file[0], offset: scroll.top - row * layout.tile };
+    }
+
+    function sameFiles(a, b) {
+        if (a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) {
+            if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false;
+        }
+        return true;
+    }
+
+    /**
      * Lists a directory and shows it.
      * descend: if it holds no images, only directories, go on into the newest of them - that is
      * where the latest images are when they are saved into a directory per day.
+     * keepPosition: the directory that is open is listed again (coming back to the tab, or the
+     * refresh button), so the grid stays where it was instead of going back to the top.
      */
-    function openDir(dir, descend) {
+    function openDir(dir, descend, keepPosition) {
         var request = ++state.request;
+        var anchor = keepPosition && dir === state.dir ? captureAnchor() : null;
+        var relisting = !!keepPosition && dir === state.dir;
         state.dir = dir;
-        setStatus("Loading...");
+        if (!relisting) setStatus("Loading...");
 
         return getJson("./sd_output_browser/list", { root: state.root, dir: dir })
             .then(function (data) {
@@ -140,6 +170,8 @@ var OutputBrowser = (function () {
                 if (descend && data.files.length == 0 && data.dirs.length > 0) {
                     return openDir(filePath(data.dirs[0]), true);
                 }
+
+                var unchanged = relisting && sameFiles(state.files, data.files);
 
                 state.files = data.files;
                 els.count.textContent =
@@ -152,7 +184,27 @@ var OutputBrowser = (function () {
                         : ""
                 );
 
-                els.grid.scrollTop = 0;
+                if (unchanged) {
+                    // nothing new: the tiles that are there stay as they are
+                    draw();
+                    return;
+                }
+
+                // New images are listed first and push the others down: follow the image that was
+                // at the top. Without one (the grid was at the top, or another directory) start at the top.
+                var top = 0;
+                if (anchor && layout.columns) {
+                    for (var i = 0; i < data.files.length; i++) {
+                        if (data.files[i][0] === anchor.name) {
+                            top =
+                                Math.floor(i / layout.columns) * layout.tile +
+                                anchor.offset;
+                            break;
+                        }
+                    }
+                }
+
+                scroll.pending = top;
                 layout.stale = true;
                 draw();
             })
@@ -230,6 +282,13 @@ var OutputBrowser = (function () {
 
         var rowCount = Math.ceil(state.files.length / columns);
         els.canvas.style.height = rowCount * tile + "px";
+
+        // applied here: the list has to have its height before it can be scrolled
+        if (scroll.pending !== null) {
+            els.grid.scrollTop = scroll.pending;
+            scroll.top = els.grid.scrollTop;
+            scroll.pending = null;
+        }
 
         if (layout.stale) {
             rows.forEach(discardRow);
@@ -313,7 +372,15 @@ var OutputBrowser = (function () {
         els.grid.appendChild(els.status);
         els.grid.appendChild(els.canvas);
 
-        els.grid.addEventListener("scroll", schedule, { passive: true });
+        els.grid.addEventListener(
+            "scroll",
+            function () {
+                // a hidden grid reports 0 whatever its position was
+                if (els.grid.clientHeight > 0) scroll.top = els.grid.scrollTop;
+                schedule();
+            },
+            { passive: true }
+        );
         new ResizeObserver(schedule).observe(els.grid);
 
         els.canvas.addEventListener("click", function (event) {
@@ -329,7 +396,7 @@ var OutputBrowser = (function () {
         gradioApp()
             .getElementById("output_browser_refresh")
             .addEventListener("click", function () {
-                openDir(state.dir);
+                openDir(state.dir, false, true);
             });
 
         setStatus("Loading...");
@@ -350,13 +417,24 @@ var OutputBrowser = (function () {
             });
     }
 
-    /** Called whenever the tab comes into view: lists the open directory again, new images included. */
+    /**
+     * Called whenever the tab comes into view: lists the open directory again, new images included.
+     * The grid stays where it was left - sending an image to txt2img and coming back does not lose
+     * the place.
+     */
     function shown() {
         if (!state.started) {
             start();
-        } else {
-            openDir(state.dir);
+            return;
         }
+
+        // browsers that dropped the position while the tab was hidden get it back right away
+        if (scroll.top > 0 && els.grid.scrollTop !== scroll.top) {
+            scroll.pending = scroll.top;
+            draw();
+        }
+
+        openDir(state.dir, false, true);
     }
 
     return {
