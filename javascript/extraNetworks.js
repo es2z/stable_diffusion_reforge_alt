@@ -21,7 +21,7 @@
 // Item data, shared between tabs
 // ============================================================================
 
-var ExtraNetworksData = (function () {
+var ExtraNetworksData = (function() {
     "use strict";
 
     // extra networks tab name ("lora", "textual_inversion", ...) -> state
@@ -46,7 +46,7 @@ var ExtraNetworksData = (function () {
      * (the server was asked and has the same list as before).
      */
     function notify(page, status, change) {
-        page.listeners.forEach(function (listener) {
+        page.listeners.forEach(function(listener) {
             try {
                 listener({
                     status: status,
@@ -78,7 +78,7 @@ var ExtraNetworksData = (function () {
     }
 
     function prepare(data) {
-        data.items.forEach(function (item, index) {
+        data.items.forEach(function(item, index) {
             prepareItem(data, item, index);
         });
 
@@ -134,16 +134,16 @@ var ExtraNetworksData = (function () {
 
         // The server answers "304 Not Modified" without a body if the list is still the one this
         // etag came with; then there is nothing to parse, and the cards stay as they are.
-        var options = { cache: "no-store" };
+        var options = {cache: "no-store"};
         if (page.data && page.etag) {
-            options.headers = { "If-None-Match": page.etag };
+            options.headers = {"If-None-Match": page.etag};
         }
 
         page.promise = fetch(
             "./sd_extra_networks/items?page=" + encodeURIComponent(pageName),
             options
         )
-            .then(function (response) {
+            .then(function(response) {
                 if (response.status === 304 && page.data) {
                     return null;
                 }
@@ -151,11 +151,11 @@ var ExtraNetworksData = (function () {
                     throw new Error("HTTP " + response.status);
                 }
                 var etag = response.headers.get("ETag");
-                return response.json().then(function (data) {
-                    return { data: data, etag: etag };
+                return response.json().then(function(data) {
+                    return {data: data, etag: etag};
                 });
             })
-            .then(function (result) {
+            .then(function(result) {
                 if (request !== page.request) {
                     return page.promise; // a newer request is on its way
                 }
@@ -168,7 +168,7 @@ var ExtraNetworksData = (function () {
                 notify(page, "ready");
                 return page.data;
             })
-            .catch(function (error) {
+            .catch(function(error) {
                 console.error(
                     "Extra Networks: could not load items for",
                     pageName,
@@ -189,9 +189,9 @@ var ExtraNetworksData = (function () {
         load: load,
 
         /** Asks the server for the items of every known page again. */
-        reloadAll: function () {
+        reloadAll: function() {
             return Promise.all(
-                Object.keys(pages).map(function (pageName) {
+                Object.keys(pages).map(function(pageName) {
                     return load(pageName, true);
                 })
             );
@@ -203,16 +203,16 @@ var ExtraNetworksData = (function () {
          * Sets usage counts and favourites from {name: {count, last_used, favorite}}.
          * complete: the map holds every item that has any; the others are reset.
          */
-        applyStats: function (pageName, stats, complete) {
+        applyStats: function(pageName, stats, complete) {
             var page = entry(pageName);
             if (!page.data) return;
 
             var changed = false;
-            page.data.items.forEach(function (item) {
+            page.data.items.forEach(function(item) {
                 var itemStats = stats[item.name];
                 if (!itemStats) {
                     if (!complete) return;
-                    itemStats = { count: 0, last_used: 0, favorite: false };
+                    itemStats = {count: 0, last_used: 0, favorite: false};
                 }
 
                 if (
@@ -241,29 +241,29 @@ var ExtraNetworksData = (function () {
         /**
          * Fetches usage counts again; they change whenever an image is generated.
          */
-        refreshStats: function (pageName) {
+        refreshStats: function(pageName) {
             var self = this;
             if (!entry(pageName).data) return;
 
             requestGet(
                 "./sd_extra_networks/stats",
-                { page: pageName },
-                function (data) {
+                {page: pageName},
+                function(data) {
                     if (data && data.stats) {
                         self.applyStats(pageName, data.stats, true);
                     }
                 },
-                function () {}
+                function() {}
             );
         },
 
         /** Returns what the server sent for the page, or null while it is not loaded. */
-        get: function (pageName) {
+        get: function(pageName) {
             return entry(pageName).data;
         },
 
         /** Returns the item with the given name, or null. */
-        getItem: function (pageName, name) {
+        getItem: function(pageName, name) {
             var data = entry(pageName).data;
             if (!data) return null;
 
@@ -274,11 +274,11 @@ var ExtraNetworksData = (function () {
         },
 
         /** Calls listener({status: "loading" | "ready" | "error", data}) whenever the page's state changes. */
-        subscribe: function (pageName, listener) {
+        subscribe: function(pageName, listener) {
             var page = entry(pageName);
             page.listeners.push(listener);
             if (page.data) {
-                listener({ status: "ready", data: page.data });
+                listener({status: "ready", data: page.data});
             }
         },
     };
@@ -288,7 +288,7 @@ var ExtraNetworksData = (function () {
 // Virtual grid of cards
 // ============================================================================
 
-var ExtraNetworksGrid = (function () {
+var ExtraNetworksGrid = (function() {
     "use strict";
 
     var CONFIG = {
@@ -314,7 +314,7 @@ var ExtraNetworksGrid = (function () {
      * are in view now have to wait for them.
      */
     function discardRow(row) {
-        row.querySelectorAll("img.preview").forEach(function (img) {
+        row.querySelectorAll("img.preview").forEach(function(img) {
             if (!img.complete) {
                 img.onerror = null;
                 img.removeAttribute("src");
@@ -372,12 +372,12 @@ var ExtraNetworksGrid = (function () {
     }
 
     // Sort keys whose natural order is "largest first": the most used and the most recently used on top.
-    var LARGEST_FIRST = { usage_count: true, last_used: true };
+    var LARGEST_FIRST = {usage_count: true, last_used: true};
 
     function compareBy(sortKey, descending) {
         var direction = (descending ? -1 : 1) * (LARGEST_FIRST[sortKey] ? -1 : 1);
 
-        return function (a, b) {
+        return function(a, b) {
             var av = a.sort_keys ? a.sort_keys[sortKey] : undefined;
             var bv = b.sort_keys ? b.sort_keys[sortKey] : undefined;
             if (av === undefined || av === null) av = "";
@@ -414,7 +414,7 @@ var ExtraNetworksGrid = (function () {
 
     function formatTime(timestamp) {
         var d = new Date(timestamp * 1000);
-        var pad = function (n) {
+        var pad = function(n) {
             return (n < 10 ? "0" : "") + n;
         };
         return (
@@ -467,7 +467,7 @@ var ExtraNetworksGrid = (function () {
         this.resizeObserver = null;
 
         var self = this;
-        this.onScroll = function () {
+        this.onScroll = function() {
             self.schedule(false);
         };
     }
@@ -476,7 +476,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Finds the container and prepares it. Done again if gradio replaced the element.
          */
-        mount: function () {
+        mount: function() {
             if (this.scroller && this.scroller.isConnected) return true;
 
             var scroller = gradioApp().querySelector(
@@ -503,7 +503,7 @@ var ExtraNetworksGrid = (function () {
 
             // Also fires when the tab is shown for the first time: until then the container has no size.
             if (this.resizeObserver) this.resizeObserver.disconnect();
-            this.resizeObserver = new ResizeObserver(function () {
+            this.resizeObserver = new ResizeObserver(function() {
                 self.schedule(true);
             });
             this.resizeObserver.observe(scroller);
@@ -514,7 +514,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Receives the state of the page's item list.
          */
-        setState: function (state) {
+        setState: function(state) {
             if (!this.mount()) return;
 
             this.scroller.classList.toggle(
@@ -528,9 +528,9 @@ var ExtraNetworksGrid = (function () {
                 this.update();
             } else if (!this.data) {
                 this.status.textContent =
-                    state.status === "loading"
-                        ? "Loading..."
-                        : "Could not load the list. Press the refresh button to try again.";
+                    state.status === "loading" ?
+                        "Loading..." :
+                        "Could not load the list. Press the refresh button to try again.";
             }
         },
 
@@ -539,7 +539,7 @@ var ExtraNetworksGrid = (function () {
          * the top; coming back to one (favourites off again, the previous sort, a cleared search, a
          * directory opened earlier) returns to where it was left.
          */
-        setView: function (view) {
+        setView: function(view) {
             var viewKey = JSON.stringify(view);
             if (viewKey === this.viewKey) return;
 
@@ -574,7 +574,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Recomputes which items are shown, and in what order, then draws them.
          */
-        update: function () {
+        update: function() {
             if (!this.data || !this.mount()) return;
 
             var view = this.view;
@@ -584,22 +584,22 @@ var ExtraNetworksGrid = (function () {
             if (view.useRegex) {
                 try {
                     var regex = new RegExp(term, "i");
-                    matches = function (text) {
+                    matches = function(text) {
                         return regex.test(text);
                     };
                 } catch (error) {
                     // Invalid regex, treat as no match
-                    matches = function () {
+                    matches = function() {
                         return false;
                     };
                 }
             } else {
                 // A directory picked in the tree or with the directory buttons is looked for as it
                 // is; text that was typed is taken word by word, and every word has to be there.
-                var words = view.literal
-                    ? [term.toLowerCase()]
-                    : searchWords(term.toLowerCase());
-                matches = function (text) {
+                var words = view.literal ?
+                    [term.toLowerCase()] :
+                    searchWords(term.toLowerCase());
+                matches = function(text) {
                     for (var i = 0; i < words.length; i++) {
                         if (text.indexOf(words[i]) === -1) return false;
                     }
@@ -609,7 +609,7 @@ var ExtraNetworksGrid = (function () {
 
             var versions = view.versions || [];
 
-            var items = this.data.items.filter(function (item) {
+            var items = this.data.items.filter(function(item) {
                 if (view.favoritesOnly && !item.favorite) return false;
                 if (
                     versions.length &&
@@ -654,12 +654,12 @@ var ExtraNetworksGrid = (function () {
          * Asks for a redraw on the next frame; scroll and resize events arrive in bursts.
          * remeasure: the size of the cards may have changed too.
          */
-        schedule: function (remeasure) {
+        schedule: function(remeasure) {
             if (remeasure) this.measured = false;
             if (this.frame !== null) return;
 
             var self = this;
-            this.frame = requestAnimationFrame(function () {
+            this.frame = requestAnimationFrame(function() {
                 self.frame = null;
                 self.layout();
             });
@@ -668,7 +668,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Card size comes from CSS and from options, so an invisible card is laid out to learn it.
          */
-        measure: function () {
+        measure: function() {
             var row = el("div", "extra-network-cards-row");
             row.style.visibility = "hidden";
             var card = this.createCard({
@@ -708,7 +708,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Fits the grid to the container and draws the rows that are in view.
          */
-        layout: function () {
+        layout: function() {
             if (!this.data || !this.mount()) return;
 
             var width = this.scroller.clientWidth;
@@ -761,7 +761,7 @@ var ExtraNetworksGrid = (function () {
             }
 
             var rows = this.rows;
-            rows.forEach(function (row, index) {
+            rows.forEach(function(row, index) {
                 if (index < first || index > last) {
                     discardRow(row);
                     rows.delete(index);
@@ -777,7 +777,7 @@ var ExtraNetworksGrid = (function () {
             }
         },
 
-        createRow: function (index) {
+        createRow: function(index) {
             var row = el("div", "extra-network-cards-row");
             row.style.top = index * this.rowHeight + "px";
 
@@ -796,13 +796,13 @@ var ExtraNetworksGrid = (function () {
          * need be - so a favourite that is toggled or a count that goes up replaces one card, and
          * a search that narrows the list down does not load the previews of what stays again.
          */
-        reconcile: function (first, last) {
+        reconcile: function(first, last) {
             var rows = this.rows;
             var canvas = this.canvas;
 
             // every card there is now, by what it shows
             var pool = new Map();
-            rows.forEach(function (row) {
+            rows.forEach(function(row) {
                 for (var i = 0; i < row.children.length; i++) {
                     var card = row.children[i];
                     var list = pool.get(card.cardKey);
@@ -811,7 +811,7 @@ var ExtraNetworksGrid = (function () {
                 }
             });
 
-            rows.forEach(function (row, index) {
+            rows.forEach(function(row, index) {
                 if (index < first || index > last) {
                     row.remove(); // its cards may still be taken over by another row
                     rows.delete(index);
@@ -837,9 +837,9 @@ var ExtraNetworksGrid = (function () {
                     var item = this.visibleItems[i];
                     var existing = pool.get(cardKey(item));
                     wanted.push(
-                        existing && existing.length
-                            ? existing.shift()
-                            : this.createCard(item)
+                        existing && existing.length ?
+                            existing.shift() :
+                            this.createCard(item)
                     );
                 }
 
@@ -851,8 +851,8 @@ var ExtraNetworksGrid = (function () {
             }
 
             // what no row wanted
-            pool.forEach(function (list) {
-                list.forEach(function (card) {
+            pool.forEach(function(list) {
+                list.forEach(function(card) {
                     cancelPreview(card);
                     card.remove();
                 });
@@ -862,7 +862,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Javascript that runs when the item is chosen.
          */
-        onclickFor: function (item) {
+        onclickFor: function(item) {
             if (item.onclick !== undefined && item.onclick !== null) {
                 return item.onclick;
             }
@@ -876,9 +876,9 @@ var ExtraNetworksGrid = (function () {
                 ", " +
                 item.negative_prompt +
                 ", " +
-                (this.data && this.data.allow_negative_prompt
-                    ? "true"
-                    : "false") +
+                (this.data && this.data.allow_negative_prompt ?
+                    "true" :
+                    "false") +
                 ");"
             );
         },
@@ -886,7 +886,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Does what clicking the item's card does; the card itself may not exist at the moment.
          */
-        activate: function (item, event) {
+        activate: function(item, event) {
             return new Function("event", this.onclickFor(item)).call(
                 null,
                 event
@@ -896,7 +896,7 @@ var ExtraNetworksGrid = (function () {
         /**
          * Builds the element for one item; same structure as html/extra-networks-card.html.
          */
-        createCard: function (item) {
+        createCard: function(item) {
             var data = this.data || {};
             var tabname = this.tabname;
             var pageName = this.pageName;
@@ -905,7 +905,7 @@ var ExtraNetworksGrid = (function () {
             card.cardKey = cardKey(item);
             if (data.card_style) card.setAttribute("style", data.card_style);
             card.setAttribute("data-name", item.name);
-            Object.keys(item.sort_keys || {}).forEach(function (key) {
+            Object.keys(item.sort_keys || {}).forEach(function(key) {
                 card.setAttribute("data-sort-" + key, item.sort_keys[key]);
             });
 
@@ -915,7 +915,7 @@ var ExtraNetworksGrid = (function () {
                 var img = el("img", "preview");
                 img.loading = "lazy";
                 img.decoding = "async";
-                img.onerror = function () {
+                img.onerror = function() {
                     img.remove(); // leaves the "no preview" background
                 };
                 img.src = item.preview;
@@ -974,9 +974,9 @@ var ExtraNetworksGrid = (function () {
                 cardButton(
                     "div",
                     "favorite-button",
-                    item.favorite
-                        ? "Remove from favorites (Shift+H)"
-                        : "Add to favorites (Shift+H)",
+                    item.favorite ?
+                        "Remove from favorites (Shift+H)" :
+                        "Add to favorites (Shift+H)",
                     "extraNetworksToggleFavorite(event, '" + pageName + "')"
                 )
             );
@@ -1037,13 +1037,13 @@ var ExtraNetworksGrid = (function () {
                     item.usage_count +
                     " time" +
                     (item.usage_count == 1 ? "" : "s") +
-                    (item.last_used
-                        ? ", last on " + formatTime(item.last_used)
-                        : "");
+                    (item.last_used ?
+                        ", last on " + formatTime(item.last_used) :
+                        "");
                 actions.appendChild(usage);
             }
             var additional = el("div", "additional");
-            (item.search_terms || []).forEach(function (term) {
+            (item.search_terms || []).forEach(function(term) {
                 var span = el(
                     "span",
                     "hidden search_terms" +
@@ -1076,7 +1076,7 @@ var ExtraNetworksGrid = (function () {
         CONFIG: CONFIG,
 
         /** Returns the grid of a page in a tab, creating it on first use. */
-        create: function (tabname, pageName) {
+        create: function(tabname, pageName) {
             var key = tabname + "_" + pageName;
             if (!instances[key]) {
                 instances[key] = new Grid(tabname, pageName);
@@ -1085,7 +1085,7 @@ var ExtraNetworksGrid = (function () {
         },
 
         /** Returns the grid for an id like "txt2img_lora", if there is one. */
-        get: function (tabname_full) {
+        get: function(tabname_full) {
             return instances[tabname_full];
         },
     };
@@ -1095,7 +1095,7 @@ var ExtraNetworksGrid = (function () {
 // Directory tree, built as it is opened
 // ============================================================================
 
-var ExtraNetworksTree = (function () {
+var ExtraNetworksTree = (function() {
     "use strict";
 
     var states = {}; // "txt2img_lora" -> what the tree in that pane was built from
@@ -1128,9 +1128,9 @@ var ExtraNetworksTree = (function () {
     /** Groups the items into nested directories by their tree_path. */
     function buildModel(data) {
         var separator = data.path_separator || "/";
-        var root = { dirs: Object.create(null), files: [] };
+        var root = {dirs: Object.create(null), files: []};
 
-        data.items.forEach(function (item) {
+        data.items.forEach(function(item) {
             if (!item.tree_path) return;
 
             var parts = item.tree_path.split(separator);
@@ -1227,7 +1227,7 @@ var ExtraNetworksTree = (function () {
         // Stays empty until the directory is opened.
         var ul = el("ul", "tree-list tree-list--subgroup");
         ul.hidden = true;
-        nodes.set(ul, { tabname: tabname, pageName: pageName, node: node });
+        nodes.set(ul, {tabname: tabname, pageName: pageName, node: node});
         li.appendChild(ul);
 
         return li;
@@ -1297,7 +1297,7 @@ var ExtraNetworksTree = (function () {
         // Directories are always displayed before files.
         Object.keys(node.dirs)
             .sort(naturalCompare)
-            .forEach(function (name) {
+            .forEach(function(name) {
                 fragment.appendChild(
                     createDirItem(
                         pending.tabname,
@@ -1309,10 +1309,10 @@ var ExtraNetworksTree = (function () {
 
         node.files
             .slice()
-            .sort(function (a, b) {
+            .sort(function(a, b) {
                 return naturalCompare(a.tree_path, b.tree_path);
             })
-            .forEach(function (item) {
+            .forEach(function(item) {
                 fragment.appendChild(
                     createFileItem(pending.tabname, pending.pageName, item)
                 );
@@ -1325,7 +1325,7 @@ var ExtraNetworksTree = (function () {
     function reopen(ul, expanded) {
         ul.querySelectorAll(
             ":scope > li > .tree-list-content-dir"
-        ).forEach(function (content) {
+        ).forEach(function(content) {
             if (!expanded.has(content.dataset.path)) return;
 
             var childUl = content.nextElementSibling;
@@ -1345,7 +1345,7 @@ var ExtraNetworksTree = (function () {
         if (!container) return;
 
         var signature = data.items
-            .map(function (item) {
+            .map(function(item) {
                 return item.tree_path || "";
             })
             .join("\n");
@@ -1363,7 +1363,7 @@ var ExtraNetworksTree = (function () {
         var selected = null;
         container
             .querySelectorAll(".tree-list-content-dir")
-            .forEach(function (content) {
+            .forEach(function(content) {
                 if ("expanded" in content.dataset) {
                     expanded.add(content.dataset.path);
                 }
@@ -1374,13 +1374,13 @@ var ExtraNetworksTree = (function () {
 
         var model = buildModel(data);
         var list = el("ul", "tree-list tree-list--tree");
-        nodes.set(list, { tabname: tabname, pageName: pageName, node: model });
+        nodes.set(list, {tabname: tabname, pageName: pageName, node: model});
         populate(list);
         reopen(list, expanded);
 
         if (selected !== null) {
             list.querySelectorAll(".tree-list-content-dir").forEach(
-                function (content) {
+                function(content) {
                     if (content.dataset.path === selected) {
                         content.dataset.selected = "";
                     }
@@ -1390,7 +1390,7 @@ var ExtraNetworksTree = (function () {
 
         container.textContent = "";
         container.appendChild(list);
-        states[key] = { signature: signature, list: list };
+        states[key] = {signature: signature, list: list};
     }
 
     return {
@@ -1445,7 +1445,7 @@ function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
     container.dataset.dirs = signature;
 
     container.textContent = "";
-    (data.dirs || []).forEach(function (subdir) {
+    (data.dirs || []).forEach(function(subdir) {
         var button = document.createElement("button");
         button.className =
             "lg secondary gradio-button custom-button" +
@@ -1485,10 +1485,10 @@ function extraNetworksRenderVersions(tabname, extra_networks_tabname, data) {
     if (!container) return;
 
     var found = {};
-    (data.items || []).forEach(function (item) {
+    (data.items || []).forEach(function(item) {
         if (item.sd_version) found[item.sd_version] = true;
     });
-    var versions = Object.keys(found).sort(function (a, b) {
+    var versions = Object.keys(found).sort(function(a, b) {
         var ia = extraNetworksVersionOrder.indexOf(a);
         var ib = extraNetworksVersionOrder.indexOf(b);
         if (ia !== ib) {
@@ -1505,20 +1505,20 @@ function extraNetworksRenderVersions(tabname, extra_networks_tabname, data) {
     var enabled = {};
     container
         .querySelectorAll(".extra-network-control--enabled")
-        .forEach(function (chip) {
+        .forEach(function(chip) {
             enabled[chip.dataset.version] = true;
         });
     var hadEnabled = Object.keys(enabled).length > 0;
 
     container.textContent = "";
-    versions.forEach(function (version) {
+    versions.forEach(function(version) {
         var chip = document.createElement("div");
         chip.className =
             "extra-network-control--version" +
             (enabled[version] ? " extra-network-control--enabled" : "");
         chip.dataset.version = version;
         chip.textContent = version;
-        chip.addEventListener("click", function () {
+        chip.addEventListener("click", function() {
             chip.classList.toggle("extra-network-control--enabled");
             applyExtraNetworkFilter(tabname_full);
         });
@@ -1546,7 +1546,7 @@ function setupExtraNetworksForTab(tabname) {
             activePromptTextarea[tabname] = textarea;
         }
 
-        textarea.addEventListener("focus", function () {
+        textarea.addEventListener("focus", function() {
             activePromptTextarea[tabname] = textarea;
         });
     }
@@ -1562,7 +1562,7 @@ function setupExtraNetworksForTab(tabname) {
     var this_tab = gradioApp().querySelector("#" + tabname + "_extra_tabs");
     this_tab
         .querySelectorAll(":scope > [id^='" + tabname + "_']")
-        .forEach(function (elem) {
+        .forEach(function(elem) {
             var tabname_full = elem.id;
             var search = gradioApp().querySelector(
                 "#" + tabname_full + "_extra_search"
@@ -1586,7 +1586,7 @@ function setupExtraNetworksForTab(tabname) {
             );
 
             // Search and sort both come down to telling the grid what to show.
-            var applyView = function () {
+            var applyView = function() {
                 var activeSortElem = gradioApp().querySelector(
                     "#" +
                         tabname_full +
@@ -1604,7 +1604,7 @@ function setupExtraNetworksForTab(tabname) {
                             tabname_full +
                             "_extra_versions .extra-network-control--version.extra-network-control--enabled"
                     )
-                    .forEach(function (chip) {
+                    .forEach(function(chip) {
                         versions.push(chip.dataset.version);
                     });
 
@@ -1616,9 +1616,9 @@ function setupExtraNetworksForTab(tabname) {
                         search.value !== "" &&
                         search.dataset.literal === search.value,
                     versions: versions,
-                    sortKey: activeSortElem
-                        ? activeSortElem.dataset.sortkey
-                        : "default",
+                    sortKey: activeSortElem ?
+                        activeSortElem.dataset.sortkey :
+                        "default",
                     descending: sort_dir.dataset.sortdir == "Descending",
                     favoritesOnly: !!(
                         favorites &&
@@ -1629,13 +1629,13 @@ function setupExtraNetworksForTab(tabname) {
                 });
             };
 
-            search.addEventListener("input", function () {
+            search.addEventListener("input", function() {
                 // A directory of the tree stays marked as selected only while the search is the one it set.
                 var tree = gradioApp().getElementById(tabname_full + "_tree");
                 if (tree) {
                     tree.querySelectorAll(
                         ".tree-list-content[data-selected]"
-                    ).forEach(function (content) {
+                    ).forEach(function(content) {
                         if (content.dataset.path !== search.value) {
                             delete content.dataset.selected;
                         }
@@ -1653,7 +1653,7 @@ function setupExtraNetworksForTab(tabname) {
             extraNetworksApplySort[tabname_full] = applyView;
             extraNetworksApplyFilter[tabname_full] = applyView;
 
-            ExtraNetworksData.subscribe(pageName, function (state) {
+            ExtraNetworksData.subscribe(pageName, function(state) {
                 grid.setState(state);
                 // usage counts and favourites are only shown on the cards
                 if (
@@ -1724,7 +1724,7 @@ function extraNetworksShowControlsForPage(tabname, tabname_full) {
         .querySelectorAll(
             "#" + tabname + "_extra_tabs .extra-networks-controls-div > div"
         )
-        .forEach(function (elem) {
+        .forEach(function(elem) {
             var targetId = tabname_full + "_controls";
             elem.style.display = elem.id == targetId ? "" : "none";
         });
@@ -1758,7 +1758,7 @@ function extraNetworksApplyPanelMode() {
     var mode = extraNetworksPanelMode();
     var side = mode != "tabs";
 
-    ["txt2img", "img2img"].forEach(function (tabname) {
+    ["txt2img", "img2img"].forEach(function(tabname) {
         var tabs = gradioApp().getElementById(tabname + "_extra_tabs");
         if (!tabs) return;
 
@@ -1770,7 +1770,7 @@ function extraNetworksApplyPanelMode() {
         );
 
         tabs.querySelectorAll(":scope > .tabitem.extra-page").forEach(
-            function (page) {
+            function(page) {
                 var pane = page.querySelector(".extra-network-pane");
                 if (!pane) return;
 
@@ -1799,7 +1799,7 @@ function extraNetworksApplyPanelMode() {
                     close.className = "extra-networks-side-close";
                     close.title = "Close the panel";
                     close.textContent = "\u00d7";
-                    close.addEventListener("click", function () {
+                    close.addEventListener("click", function() {
                         var first = tabs.querySelector(
                             ":scope > .tab-nav > button"
                         );
@@ -1841,7 +1841,7 @@ function extraNetworksUpdateSidePanelLayout() {
     if (mode != "tabs") {
         gradioApp()
             .querySelectorAll(".extra-networks-side > .tabitem.extra-page")
-            .forEach(function (page) {
+            .forEach(function(page) {
                 // an open page of the tab that is on screen
                 if (page.getClientRects().length > 0) open = true;
             });
@@ -1861,10 +1861,10 @@ function extraNetworksSidePanelResizeStart(event) {
     event.preventDefault();
 
     var left = extraNetworksPanelMode() == "left";
-    var onMove = function (moveEvent) {
-        var width = left
-            ? moveEvent.clientX
-            : window.innerWidth - moveEvent.clientX;
+    var onMove = function(moveEvent) {
+        var width = left ?
+            moveEvent.clientX :
+            window.innerWidth - moveEvent.clientX;
         width = Math.max(
             320,
             Math.min(width, Math.round(window.innerWidth * 0.7))
@@ -1875,7 +1875,7 @@ function extraNetworksSidePanelResizeStart(event) {
         );
         localSet("extra_networks_side_width", width);
     };
-    var onUp = function () {
+    var onUp = function() {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
         document.body.classList.remove("extra-networks-side-resizing");
@@ -1887,7 +1887,7 @@ function extraNetworksSidePanelResizeStart(event) {
 }
 
 // Panels open and close with the tab buttons, and are only on screen with their main tab.
-document.addEventListener("click", function (event) {
+document.addEventListener("click", function(event) {
     if (event.target.closest && event.target.closest(".tab-nav")) {
         setTimeout(extraNetworksUpdateSidePanelLayout, 0);
         setTimeout(extraNetworksUpdateSidePanelLayout, 150);
@@ -1925,7 +1925,7 @@ function extraNetworksTabSelected(
 }
 
 function applyExtraNetworkFilter(tabname_full) {
-    var doFilter = function () {
+    var doFilter = function() {
         var applyFunction = extraNetworksApplyFilter[tabname_full];
         if (applyFunction) {
             applyFunction(true);
@@ -1935,7 +1935,7 @@ function applyExtraNetworkFilter(tabname_full) {
 }
 
 function applyExtraNetworkSort(tabname_full) {
-    var doSort = function () {
+    var doSort = function() {
         extraNetworksApplySort[tabname_full](true);
     };
     setTimeout(doSort, 1);
@@ -1971,7 +1971,7 @@ function tryToRemoveExtraNetworkFromPrompt(textarea, text, isNeg) {
         var foundAtPosition = -1;
         newTextareaText = textarea.value.replaceAll(
             isNeg ? re_extranet_g_neg : re_extranet_g,
-            function (found, net, pos) {
+            function(found, net, pos) {
                 m = found.match(isNeg ? re_extranet_neg : re_extranet);
                 if (m[1] == partToSearch) {
                     replaced = true;
@@ -2061,11 +2061,11 @@ function cardClicked(
             true
         );
     } else {
-        var textarea = allowNegativePrompt
-            ? activePromptTextarea[tabname]
-            : gradioApp().querySelector(
-                  "#" + tabname + "_prompt > label > textarea"
-              );
+        var textarea = allowNegativePrompt ?
+            activePromptTextarea[tabname] :
+            gradioApp().querySelector(
+                "#" + tabname + "_prompt > label > textarea"
+            );
         updatePromptArea(textToAdd, textarea);
     }
 }
@@ -2094,9 +2094,9 @@ function extraNetworksSearchButton(tabname, extra_networks_tabname, event) {
         "#" + tabname + "_" + extra_networks_tabname + "_extra_search"
     );
     var button = event.target;
-    var text = button.classList.contains("search-all")
-        ? ""
-        : button.textContent.trim();
+    var text = button.classList.contains("search-all") ?
+        "" :
+        button.textContent.trim();
 
     // the name of a directory is looked for as a whole, spaces included
     searchTextarea.dataset.literal = text;
@@ -2221,7 +2221,7 @@ function extraNetworksControlSortOnClick(
 
     parent
         .querySelectorAll(".extra-network-control--sort")
-        .forEach(function (x) {
+        .forEach(function(x) {
             x.classList.remove("extra-network-control--enabled");
         });
 
@@ -2250,15 +2250,15 @@ function extraNetworksControlFavoritesOnClick(
 function extraNetworksPostJson(url, body, handler) {
     fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {"Content-Type": "application/json"},
         body: JSON.stringify(body),
     })
-        .then(function (response) {
+        .then(function(response) {
             if (!response.ok) throw new Error("HTTP " + response.status);
             return response.json();
         })
         .then(handler)
-        .catch(function (error) {
+        .catch(function(error) {
             console.error("Extra Networks:", url, error);
         });
 }
@@ -2274,11 +2274,11 @@ function extraNetworksControlClearUsageOnClick(
 ) {
     // All cards of the page at once: asked first.
     var data = ExtraNetworksData.get(extra_networks_tabname);
-    var used = data
-        ? data.items.filter(function (item) {
+    var used = data ?
+        data.items.filter(function(item) {
             return item.usage_count > 0;
-        }).length
-        : 0;
+        }).length :
+        0;
     if (
         !confirm(
             "Clear the usage counts of all cards on this page (" +
@@ -2291,8 +2291,8 @@ function extraNetworksControlClearUsageOnClick(
 
     extraNetworksPostJson(
         "./sd_extra_networks/clear-usage",
-        { page: extra_networks_tabname, name: "" },
-        function (data) {
+        {page: extra_networks_tabname, name: ""},
+        function(data) {
             ExtraNetworksData.applyStats(
                 extra_networks_tabname,
                 data.stats || {},
@@ -2318,8 +2318,8 @@ function extraNetworksClearUsage(event, extra_networks_tabname) {
 
     extraNetworksPostJson(
         "./sd_extra_networks/clear-usage",
-        { page: extra_networks_tabname, name: name },
-        function (data) {
+        {page: extra_networks_tabname, name: name},
+        function(data) {
             ExtraNetworksData.applyStats(
                 extra_networks_tabname,
                 data.stats || {},
@@ -2347,8 +2347,8 @@ function extraNetworksToggleFavoriteByName(extra_networks_tabname, name) {
 
     extraNetworksPostJson(
         "./sd_extra_networks/favorite",
-        { page: extra_networks_tabname, name: name, favorite: !item.favorite },
-        function (data) {
+        {page: extra_networks_tabname, name: name, favorite: !item.favorite},
+        function(data) {
             var stats = {};
             stats[name] = data.stats;
             ExtraNetworksData.applyStats(extra_networks_tabname, stats, false);
@@ -2535,13 +2535,13 @@ function extraNetworksShowMetadata(text) {
 function requestGet(url, data, handler, errorHandler) {
     var xhr = new XMLHttpRequest();
     var args = Object.keys(data)
-        .map(function (k) {
+        .map(function(k) {
             return encodeURIComponent(k) + "=" + encodeURIComponent(data[k]);
         })
         .join("&");
     xhr.open("GET", url + "?" + args, true);
 
-    xhr.onreadystatechange = function () {
+    xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
             if (xhr.status === 200) {
                 try {
@@ -2568,7 +2568,7 @@ function extraNetworksCopyCardPath(event) {
 
     // For pages without the clipboard API: it only exists on https and on localhost, not when the
     // UI is opened from another device over plain http.
-    var copyWithSelection = function () {
+    var copyWithSelection = function() {
         var textarea = document.createElement("textarea");
         textarea.value = text;
         textarea.setAttribute("readonly", "");
@@ -2591,7 +2591,7 @@ function extraNetworksCopyCardPath(event) {
 }
 
 function extraNetworksRequestMetadata(event, extraPage) {
-    var showError = function () {
+    var showError = function() {
         extraNetworksShowMetadata("there was an error getting metadata");
     };
 
@@ -2600,8 +2600,8 @@ function extraNetworksRequestMetadata(event, extraPage) {
 
     requestGet(
         "./sd_extra_networks/metadata",
-        { page: extraPage, item: cardName },
-        function (data) {
+        {page: extraPage, item: cardName},
+        function(data) {
             if (data && data.metadata) {
                 extraNetworksShowMetadata(data.metadata);
             } else {
@@ -2646,14 +2646,14 @@ function extraNetworksEditUserMetadata(event, tabname, extraPage) {
 function extraNetworksRefreshSingleCard(page, tabname, name) {
     // `page` is the page's name; its items are kept under the name of its tab
     var pageName = page.replace(/ /g, "_");
-    var reloadPage = function () {
+    var reloadPage = function() {
         ExtraNetworksData.load(pageName, true);
     };
 
     requestGet(
         "./sd_extra_networks/get-single-card",
-        { page: page, tabname: tabname, name: name },
-        function (data) {
+        {page: page, tabname: tabname, name: name},
+        function(data) {
             // Only this item changes; every tab showing the page redraws its visible cards.
             if (
                 !data ||
@@ -2741,7 +2741,7 @@ function extraNetworksPasteFinished(tabname, status) {
         extraNetworksToast(
             "Parameters of the preview image applied. Ctrl+Z takes it back.",
             "Undo",
-            function () {
+            function() {
                 extraNetworksUndoPreviewParams(tabname);
             }
         );
@@ -2767,7 +2767,7 @@ function extraNetworksVisibleGenerationTab() {
 // Ctrl+Z right after applying takes the whole apply back, wherever the focus is.
 window.addEventListener(
     "keydown",
-    function (event) {
+    function(event) {
         if (
             !(event.ctrlKey || event.metaKey) ||
             event.shiftKey ||
@@ -2788,13 +2788,13 @@ window.addEventListener(
 );
 
 // Once the user changes something by hand, Ctrl+Z belongs to that edit again.
-["input", "change"].forEach(function (type) {
+["input", "change"].forEach(function(type) {
     window.addEventListener(
         type,
-        function (event) {
+        function(event) {
             if (!event.isTrusted) return;
 
-            ["txt2img", "img2img"].forEach(function (tabname) {
+            ["txt2img", "img2img"].forEach(function(tabname) {
                 if (!extraNetworksPasteUndoArmed[tabname]) return;
 
                 var tab = gradioApp().getElementById("tab_" + tabname);
@@ -2846,7 +2846,7 @@ function extraNetworksSendPreviewToPngInfo(event) {
     extraNetworksSwitchToMainTab("tab_pnginfo");
 }
 
-window.addEventListener("keydown", function (event) {
+window.addEventListener("keydown", function(event) {
     if (event.key == "Escape") {
         closePopup();
     }
@@ -2897,7 +2897,7 @@ function extraNetworksIsTyping(event) {
 
 // H: favourites only <-> all cards, for the page of cards that is open.
 // Shift+H: adds the card under the mouse pointer to the favourites, or removes it.
-window.addEventListener("keydown", function (event) {
+window.addEventListener("keydown", function(event) {
     if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
     if (event.key != "h" && event.key != "H") return;
     if (extraNetworksIsTyping(event)) return;
@@ -2940,15 +2940,15 @@ var executedAfterScripts = false;
 
 function scheduleAfterScriptsCallbacks() {
     clearTimeout(uiAfterScriptsTimeout);
-    uiAfterScriptsTimeout = setTimeout(function () {
+    uiAfterScriptsTimeout = setTimeout(function() {
         executeCallbacks(uiAfterScriptsCallbacks);
     }, 200);
 }
 
-onUiLoaded(function () {
+onUiLoaded(function() {
     var mutationObserver = null;
 
-    var check = function () {
+    var check = function() {
         let existingSearchfields = gradioApp().querySelectorAll(
             "[id$='_extra_search']"
         ).length;

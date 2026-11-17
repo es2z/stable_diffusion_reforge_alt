@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (input) {
             input.addEventListener('input', updateHrCfgScaleState);
             input.addEventListener('change', updateHrCfgScaleState);
-            
+
             updateHrCfgScaleState();
         }
     }

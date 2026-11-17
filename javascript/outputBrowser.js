@@ -7,7 +7,7 @@
  * than a small one.
  */
 
-var OutputBrowser = (function () {
+var OutputBrowser = (function() {
     "use strict";
 
     var CONFIG = {
@@ -29,12 +29,12 @@ var OutputBrowser = (function () {
 
     var els = {};
     var rows = new Map(); // row index -> element
-    var layout = { columns: 0, tile: 0, stale: true };
+    var layout = {columns: 0, tile: 0, stale: true};
     var frame = null;
 
     // Where the grid is scrolled to. Kept here because a hidden tab has no scroll position to read:
     // while the History tab is not shown the grid reports 0, and some browsers forget it for good.
-    var scroll = { top: 0, pending: null };
+    var scroll = {top: 0, pending: null};
 
     function el(tag, className, text) {
         var element = document.createElement(tag);
@@ -45,7 +45,7 @@ var OutputBrowser = (function () {
 
     function getJson(url, params) {
         var query = Object.keys(params || {})
-            .map(function (key) {
+            .map(function(key) {
                 return (
                     encodeURIComponent(key) +
                     "=" +
@@ -56,7 +56,7 @@ var OutputBrowser = (function () {
 
         return fetch(url + (query ? "?" + query : ""), {
             cache: "no-store",
-        }).then(function (response) {
+        }).then(function(response) {
             if (!response.ok) throw new Error("HTTP " + response.status);
             return response.json();
         });
@@ -89,10 +89,10 @@ var OutputBrowser = (function () {
         els.path.textContent = "";
 
         var parts = state.dir ? state.dir.split("/") : [];
-        var crumb = function (label, dir) {
+        var crumb = function(label, dir) {
             var link = el("a", "output-browser-crumb", label);
             link.href = "#";
-            link.addEventListener("click", function (event) {
+            link.addEventListener("click", function(event) {
                 event.preventDefault();
                 openDir(dir);
             });
@@ -100,7 +100,7 @@ var OutputBrowser = (function () {
         };
 
         crumb(state.roots[state.root] ? state.roots[state.root].label : "", "");
-        parts.forEach(function (part, index) {
+        parts.forEach(function(part, index) {
             els.path.appendChild(el("span", "output-browser-crumb-sep", "/"));
             crumb(part, parts.slice(0, index + 1).join("/"));
         });
@@ -112,15 +112,15 @@ var OutputBrowser = (function () {
         if (state.dir) {
             var up = el("button", "lg secondary gradio-button custom-button", "..");
             up.title = "Parent directory";
-            up.addEventListener("click", function () {
+            up.addEventListener("click", function() {
                 openDir(state.dir.split("/").slice(0, -1).join("/"));
             });
             els.dirs.appendChild(up);
         }
 
-        dirs.forEach(function (name) {
+        dirs.forEach(function(name) {
             var button = el("button", "lg secondary gradio-button custom-button", name);
-            button.addEventListener("click", function () {
+            button.addEventListener("click", function() {
                 openDir(filePath(name));
             });
             els.dirs.appendChild(button);
@@ -138,7 +138,7 @@ var OutputBrowser = (function () {
         var file = state.files[row * layout.columns];
         if (!file) return null;
 
-        return { name: file[0], offset: scroll.top - row * layout.tile };
+        return {name: file[0], offset: scroll.top - row * layout.tile};
     }
 
     function sameFiles(a, b) {
@@ -163,8 +163,8 @@ var OutputBrowser = (function () {
         state.dir = dir;
         if (!relisting) setStatus("Loading...");
 
-        return getJson("./sd_output_browser/list", { root: state.root, dir: dir })
-            .then(function (data) {
+        return getJson("./sd_output_browser/list", {root: state.root, dir: dir})
+            .then(function(data) {
                 if (request !== state.request) return;
 
                 if (descend && data.files.length == 0 && data.dirs.length > 0) {
@@ -179,9 +179,9 @@ var OutputBrowser = (function () {
                 renderPath();
                 renderDirs(data.dirs);
                 setStatus(
-                    data.files.length == 0 && data.dirs.length == 0
-                        ? "No images here."
-                        : ""
+                    data.files.length == 0 && data.dirs.length == 0 ?
+                        "No images here." :
+                        ""
                 );
 
                 if (unchanged) {
@@ -208,7 +208,7 @@ var OutputBrowser = (function () {
                 layout.stale = true;
                 draw();
             })
-            .catch(function (error) {
+            .catch(function(error) {
                 if (request !== state.request) return;
                 console.error("History:", error);
                 state.files = [];
@@ -222,7 +222,7 @@ var OutputBrowser = (function () {
 
     /** Removes a row; thumbnails in it that are still loading are cancelled, they are not needed anymore. */
     function discardRow(row) {
-        row.querySelectorAll("img").forEach(function (img) {
+        row.querySelectorAll("img").forEach(function(img) {
             if (!img.complete) img.removeAttribute("src");
         });
         row.remove();
@@ -230,7 +230,7 @@ var OutputBrowser = (function () {
 
     function schedule() {
         if (frame !== null) return;
-        frame = requestAnimationFrame(function () {
+        frame = requestAnimationFrame(function() {
             frame = null;
             draw();
         });
@@ -305,7 +305,7 @@ var OutputBrowser = (function () {
             Math.floor((top + els.grid.clientHeight) / tile) + CONFIG.OVERSCAN_ROWS
         );
 
-        rows.forEach(function (row, index) {
+        rows.forEach(function(row, index) {
             if (index < first || index > last) {
                 discardRow(row);
                 rows.delete(index);
@@ -333,7 +333,7 @@ var OutputBrowser = (function () {
         state.selected = file[0];
         els.canvas
             .querySelectorAll(".output-browser-tile--selected")
-            .forEach(function (tile) {
+            .forEach(function(tile) {
                 tile.classList.remove("output-browser-tile--selected");
             });
         var tile = els.canvas.querySelector(
@@ -374,36 +374,36 @@ var OutputBrowser = (function () {
 
         els.grid.addEventListener(
             "scroll",
-            function () {
+            function() {
                 // a hidden grid reports 0 whatever its position was
                 if (els.grid.clientHeight > 0) scroll.top = els.grid.scrollTop;
                 schedule();
             },
-            { passive: true }
+            {passive: true}
         );
         new ResizeObserver(schedule).observe(els.grid);
 
-        els.canvas.addEventListener("click", function (event) {
+        els.canvas.addEventListener("click", function(event) {
             var tile = event.target.closest(".output-browser-tile");
             if (tile) select(parseInt(tile.getAttribute("data-index")));
         });
 
-        els.rootSelect.addEventListener("change", function () {
+        els.rootSelect.addEventListener("change", function() {
             state.root = parseInt(els.rootSelect.value) || 0;
             openDir("", true);
         });
 
         gradioApp()
             .getElementById("output_browser_refresh")
-            .addEventListener("click", function () {
+            .addEventListener("click", function() {
                 openDir(state.dir, false, true);
             });
 
         setStatus("Loading...");
         getJson("./sd_output_browser/roots")
-            .then(function (data) {
+            .then(function(data) {
                 state.roots = data.roots;
-                data.roots.forEach(function (item, index) {
+                data.roots.forEach(function(item, index) {
                     var option = el("option", "", item.label);
                     option.value = index;
                     option.title = item.path;
@@ -411,7 +411,7 @@ var OutputBrowser = (function () {
                 });
                 return openDir("", true);
             })
-            .catch(function (error) {
+            .catch(function(error) {
                 console.error("History:", error);
                 setStatus("Could not list the output directories.");
             });
@@ -444,13 +444,13 @@ var OutputBrowser = (function () {
     };
 })();
 
-onUiLoaded(function () {
+onUiLoaded(function() {
     var tab = gradioApp().getElementById("tab_output_browser");
     if (!tab) return;
 
     // Nothing is listed until the tab is opened for the first time.
     var wasVisible = false;
-    var check = function () {
+    var check = function() {
         var visible = tab.style.display != "none";
         if (visible && !wasVisible) OutputBrowser.shown();
         wasVisible = visible;
