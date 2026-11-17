@@ -39,10 +39,18 @@ var ExtraNetworksData = (function () {
         return pages[pageName];
     }
 
-    function notify(page, status) {
+    /**
+     * change: what is different from the last "ready" state - "all" (the list was loaded),
+     * "item" (one item was replaced) or "stats" (usage counts and favourites only).
+     */
+    function notify(page, status, change) {
         page.listeners.forEach(function (listener) {
             try {
-                listener({ status: status, data: page.data });
+                listener({
+                    status: status,
+                    data: page.data,
+                    change: change || "all",
+                });
             } catch (error) {
                 console.error(error);
             }
@@ -109,7 +117,7 @@ var ExtraNetworksData = (function () {
             data.items.push(prepareItem(data, item, data.items.length));
         }
 
-        notify(page, "ready");
+        notify(page, "ready", "item");
         return true;
     }
 
@@ -179,11 +187,20 @@ var ExtraNetworksData = (function () {
             var page = entry(pageName);
             if (!page.data) return;
 
+            var changed = false;
             page.data.items.forEach(function (item) {
                 var itemStats = stats[item.name];
                 if (!itemStats) {
                     if (!complete) return;
                     itemStats = { count: 0, last_used: 0, favorite: false };
+                }
+
+                if (
+                    (item.usage_count || 0) === itemStats.count &&
+                    (item.last_used || 0) === itemStats.last_used &&
+                    !!item.favorite === !!itemStats.favorite
+                ) {
+                    return;
                 }
 
                 item.usage_count = itemStats.count;
@@ -192,9 +209,13 @@ var ExtraNetworksData = (function () {
                 item.sort_keys = item.sort_keys || {};
                 item.sort_keys.usage_count = itemStats.count;
                 item.sort_keys.last_used = itemStats.last_used;
+                // the card that was drawn for the item is out of date
+                item.cardKey = undefined;
+                changed = true;
             });
 
-            notify(page, "ready");
+            // Asked for every time a page is opened; most of the time the numbers are the same.
+            if (changed) notify(page, "ready", "stats");
         },
 
         /**
@@ -280,6 +301,41 @@ var ExtraNetworksGrid = (function () {
             }
         });
         row.remove();
+    }
+
+    /**
+     * Text that is the same for as long as the card of an item would be the same. Made on first
+     * use and kept with the item; whatever changes an item in place has to clear `item.cardKey`.
+     */
+    function cardKey(item) {
+        if (item.cardKey === undefined) {
+            item.cardKey = JSON.stringify([
+                item.name,
+                item.filename,
+                item.preview,
+                item.description,
+                item.search_terms,
+                item.search_only,
+                item.sort_keys,
+                item.has_metadata,
+                item.usage_count,
+                item.last_used,
+                item.favorite,
+                item.onclick,
+                item.prompt,
+                item.negative_prompt,
+            ]);
+        }
+        return item.cardKey;
+    }
+
+    /** Stops the preview of a card that is not needed anymore from loading. */
+    function cancelPreview(card) {
+        var img = card.querySelector("img.preview");
+        if (img && !img.complete) {
+            img.onerror = null;
+            img.removeAttribute("src");
+        }
     }
 
     function cardButton(tag, className, title, onclick) {
@@ -383,7 +439,9 @@ var ExtraNetworksGrid = (function () {
         this.cardWidth = 0;
         this.rowHeight = 0;
         this.measured = false; // card size is known
-        this.stale = true; // rendered rows no longer match the items
+        this.stale = true; // rendered rows have to be thrown away: the size or the look of the cards changed
+        this.dirty = true; // rendered rows may not show the right items; cards that still fit are kept
+        this.epoch = null; // what all cards of the page have in common
 
         this.frame = null;
         this.resizeObserver = null;
@@ -546,8 +604,21 @@ var ExtraNetworksGrid = (function () {
             items.sort(compareBy(view.sortKey, view.descending));
 
             this.visibleItems = items;
-            this.measured = false; // options that set the card size arrive with the data
-            this.stale = true;
+            this.dirty = true;
+
+            // Options that set the size and the look of every card arrive with the data. Only when
+            // they change are the cards measured and built anew; otherwise the cards on screen that
+            // still show the right thing stay, and just the ones that differ are replaced.
+            var epoch = JSON.stringify([
+                this.data.card_style,
+                this.data.description_is_html,
+                this.data.allow_negative_prompt,
+            ]);
+            if (epoch !== this.epoch) {
+                this.epoch = epoch;
+                this.measured = false;
+                this.stale = true;
+            }
 
             if (this.data.items.length === 0) {
                 this.status.innerHTML = this.data.no_cards_html || "";
@@ -644,6 +715,7 @@ var ExtraNetworksGrid = (function () {
                 this.rows.forEach(discardRow);
                 this.rows.clear();
                 this.stale = false;
+                this.dirty = false;
             }
 
             // position of the viewport relative to the first row
@@ -660,6 +732,12 @@ var ExtraNetworksGrid = (function () {
                 rowCount - 1,
                 Math.floor(bottom / this.rowHeight) + CONFIG.OVERSCAN_ROWS
             );
+
+            if (this.dirty) {
+                this.dirty = false;
+                this.reconcile(first, last);
+                return;
+            }
 
             var rows = this.rows;
             rows.forEach(function (row, index) {
@@ -689,6 +767,75 @@ var ExtraNetworksGrid = (function () {
             }
 
             return row;
+        },
+
+        /**
+         * Makes rows first..last show the items they should, after the items or their order
+         * changed. Cards that are on screen and still right are kept - moved to their new place if
+         * need be - so a favourite that is toggled or a count that goes up replaces one card, and
+         * a search that narrows the list down does not load the previews of what stays again.
+         */
+        reconcile: function (first, last) {
+            var rows = this.rows;
+            var canvas = this.canvas;
+
+            // every card there is now, by what it shows
+            var pool = new Map();
+            rows.forEach(function (row) {
+                for (var i = 0; i < row.children.length; i++) {
+                    var card = row.children[i];
+                    var list = pool.get(card.cardKey);
+                    if (!list) pool.set(card.cardKey, (list = []));
+                    list.push(card);
+                }
+            });
+
+            rows.forEach(function (row, index) {
+                if (index < first || index > last) {
+                    row.remove(); // its cards may still be taken over by another row
+                    rows.delete(index);
+                }
+            });
+
+            for (var index = first; index <= last; index++) {
+                var row = rows.get(index);
+                if (!row) {
+                    row = el("div", "extra-network-cards-row");
+                    row.style.top = index * this.rowHeight + "px";
+                    rows.set(index, row);
+                    canvas.appendChild(row);
+                }
+
+                var start = index * this.columns;
+                var end = Math.min(
+                    start + this.columns,
+                    this.visibleItems.length
+                );
+                var wanted = [];
+                for (var i = start; i < end; i++) {
+                    var item = this.visibleItems[i];
+                    var existing = pool.get(cardKey(item));
+                    wanted.push(
+                        existing && existing.length
+                            ? existing.shift()
+                            : this.createCard(item)
+                    );
+                }
+
+                var same = row.children.length === wanted.length;
+                for (var j = 0; same && j < wanted.length; j++) {
+                    same = row.children[j] === wanted[j];
+                }
+                if (!same) row.replaceChildren.apply(row, wanted);
+            }
+
+            // what no row wanted
+            pool.forEach(function (list) {
+                list.forEach(function (card) {
+                    cancelPreview(card);
+                    card.remove();
+                });
+            });
         },
 
         /**
@@ -734,6 +881,7 @@ var ExtraNetworksGrid = (function () {
             var pageName = this.pageName;
 
             var card = el("div", item.favorite ? "card favorite" : "card");
+            card.cardKey = cardKey(item);
             if (data.card_style) card.setAttribute("style", data.card_style);
             card.setAttribute("data-name", item.name);
             Object.keys(item.sort_keys || {}).forEach(function (key) {
@@ -1268,6 +1416,13 @@ function extraNetworksRenderDirs(tabname, extra_networks_tabname, data) {
     );
     if (!container) return;
 
+    // the buttons are only made again when the directories are different
+    var signature = JSON.stringify(data.dirs || []);
+    if (container.dataset.dirs === signature && container.children.length) {
+        return;
+    }
+    container.dataset.dirs = signature;
+
     container.textContent = "";
     (data.dirs || []).forEach(function (subdir) {
         var button = document.createElement("button");
@@ -1479,7 +1634,8 @@ function setupExtraNetworksForTab(tabname) {
 
             ExtraNetworksData.subscribe(pageName, function (state) {
                 grid.setState(state);
-                if (state.status === "ready") {
+                // usage counts and favourites are only shown on the cards
+                if (state.status === "ready" && state.change !== "stats") {
                     extraNetworksRenderDirs(tabname, pageName, state.data);
                     extraNetworksRenderVersions(tabname, pageName, state.data);
                     ExtraNetworksTree.render(tabname, pageName, state.data);
