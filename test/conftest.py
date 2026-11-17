@@ -1,5 +1,7 @@
 import base64
 import os
+import shlex
+import sys
 
 import pytest
 
@@ -11,6 +13,10 @@ def pytest_configure(config):
     # We don't want to fail on Py.test command line arguments being
     # parsed by webui:
     os.environ.setdefault("IGNORE_CMD_ARGS_ERRORS", "1")
+
+    # Arguments for the webui that tests marked with the `initialize` fixture start in this
+    # process, e.g. WEBUI_TEST_ARGS="--always-cpu --skip-torch-cuda-test" where there is no GPU.
+    sys.argv += shlex.split(os.environ.get("WEBUI_TEST_ARGS", ""))
 
 
 def file_to_base64(filename):
