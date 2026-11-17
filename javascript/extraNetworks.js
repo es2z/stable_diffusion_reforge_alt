@@ -771,7 +771,9 @@ var ExtraNetworksGrid = (function () {
                 cardButton(
                     "div",
                     "favorite-button",
-                    item.favorite ? "Remove from favorites" : "Add to favorites",
+                    item.favorite
+                        ? "Remove from favorites (Shift+H)"
+                        : "Add to favorites (Shift+H)",
                     "extraNetworksToggleFavorite(event, '" + pageName + "')"
                 )
             );
@@ -2031,7 +2033,13 @@ function extraNetworksClearUsage(event, extra_networks_tabname) {
 function extraNetworksToggleFavorite(event, extra_networks_tabname) {
     event.stopPropagation();
 
-    var name = event.target.closest(".card").getAttribute("data-name");
+    extraNetworksToggleFavoriteByName(
+        extra_networks_tabname,
+        event.target.closest(".card").getAttribute("data-name")
+    );
+}
+
+function extraNetworksToggleFavoriteByName(extra_networks_tabname, name) {
     var item = ExtraNetworksData.getItem(extra_networks_tabname, name);
     if (!item) return;
 
@@ -2540,6 +2548,84 @@ window.addEventListener("keydown", function (event) {
     if (event.key == "Escape") {
         closePopup();
     }
+});
+
+// ============================================================================
+// Keyboard shortcuts of the card pages
+// ============================================================================
+
+/**
+ * The page of cards that is on screen: {tabname, pageName, tabnameFull, element}, or null.
+ * In tabs mode that is the open Lora / Checkpoints / ... tab, in side panel mode the open panel.
+ */
+function extraNetworksVisiblePage() {
+    var tabname = extraNetworksVisibleGenerationTab();
+    if (!tabname) return null;
+
+    var pages = gradioApp().querySelectorAll(
+        "#" + tabname + "_extra_tabs > .tabitem.extra-page"
+    );
+    for (var i = 0; i < pages.length; i++) {
+        if (pages[i].getClientRects().length > 0) {
+            return {
+                tabname: tabname,
+                pageName: pages[i].id.slice(tabname.length + 1),
+                tabnameFull: pages[i].id,
+                element: pages[i],
+            };
+        }
+    }
+    return null;
+}
+
+/** True while the key belongs to something the user is writing in. */
+function extraNetworksIsTyping(event) {
+    var target =
+        (event.composedPath && event.composedPath()[0]) || event.target;
+    if (!target || !target.tagName) return false;
+
+    if (target.isContentEditable) return true;
+    if (target.tagName == "TEXTAREA" || target.tagName == "SELECT") return true;
+
+    return (
+        target.tagName == "INPUT" &&
+        !/^(checkbox|radio|button|range|submit|reset)$/i.test(target.type)
+    );
+}
+
+// H: favourites only <-> all cards, for the page of cards that is open.
+// Shift+H: adds the card under the mouse pointer to the favourites, or removes it.
+window.addEventListener("keydown", function (event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    if (event.key != "h" && event.key != "H") return;
+    if (extraNetworksIsTyping(event)) return;
+
+    // a popup (metadata editor) or the full page image viewer is in front of the cards
+    if (globalPopup && globalPopup.style.display != "none") return;
+    var lightbox = gradioApp().getElementById("lightboxModal");
+    if (lightbox && lightbox.style.display && lightbox.style.display != "none") {
+        return;
+    }
+
+    var page = extraNetworksVisiblePage();
+    if (!page) return;
+
+    if (event.shiftKey) {
+        var card = page.element.querySelector(".card:hover");
+        if (!card) return;
+        extraNetworksToggleFavoriteByName(
+            page.pageName,
+            card.getAttribute("data-name")
+        );
+    } else {
+        var favorites = gradioApp().getElementById(
+            page.tabnameFull + "_extra_favorites"
+        );
+        if (!favorites) return;
+        favorites.click();
+    }
+
+    event.preventDefault();
 });
 
 // ============================================================================
